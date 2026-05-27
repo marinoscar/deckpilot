@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # DeckPilot installer — one-command install, idempotent, makes `deckpilot`
-# available on PATH from any directory.
+# available on PATH from any directory. Works both inside a cloned repo and
+# bootstrapped from the GitHub raw URL via `curl | bash`.
 #
 # Usage:
 #   ./install.sh                 install for current user via `npm link`
@@ -8,6 +9,15 @@
 #   ./install.sh --uninstall     remove
 #   ./install.sh --no-build      skip the build step (faster re-link during dev)
 #   ./install.sh --quiet         less chatty
+#
+# Remote install (Ubuntu/macOS/WSL):
+#   curl -fsSL https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.sh | bash
+#
+# Env vars:
+#   DECKPILOT_INSTALL_DIR   where to clone the repo when bootstrapping
+#                           (default: $HOME/.deckpilot/repo)
+#   DECKPILOT_REPO_URL      git URL to clone (default: official repo)
+#   DECKPILOT_REF           git ref to check out (default: main)
 #
 # Re-running is safe.
 
@@ -25,15 +35,40 @@ while [ $# -gt 0 ]; do
     --no-build) SKIP_BUILD=1; shift ;;
     --quiet) QUIET=1; shift ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_REPO_URL="https://github.com/marinoscar/deckpilot.git"
+DEFAULT_REF="main"
+DEFAULT_INSTALL_DIR="$HOME/.deckpilot/repo"
+
+REPO_URL="${DECKPILOT_REPO_URL:-$DEFAULT_REPO_URL}"
+REF="${DECKPILOT_REF:-$DEFAULT_REF}"
 SYSTEM_LINK="/usr/local/bin/deckpilot"
+
+# Detect whether this script lives inside a real deckpilot checkout. If yes,
+# use it. Otherwise (curl | bash, or running outside the repo), clone into
+# $DECKPILOT_INSTALL_DIR and treat that as the source of truth.
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+if [ -f "$SCRIPT_PATH" ]; then
+  CANDIDATE_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+else
+  CANDIDATE_DIR=""
+fi
+
+if [ -n "$CANDIDATE_DIR" ] \
+   && [ -f "$CANDIDATE_DIR/package.json" ] \
+   && grep -q '"name": "deckpilot"' "$CANDIDATE_DIR/package.json" 2>/dev/null; then
+  REPO_DIR="$CANDIDATE_DIR"
+  BOOTSTRAP=0
+else
+  REPO_DIR="${DECKPILOT_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+  BOOTSTRAP=1
+fi
 
 # colors
 if [ -t 1 ]; then
@@ -52,15 +87,44 @@ step() { [ "$QUIET" -eq 1 ] || printf '%s· %s%s\n' "$B" "$*" "$X"; }
 # ---------- preflight ----------
 preflight() {
   step "Preflight"
-  command -v node >/dev/null 2>&1 || die "Node is not installed. Try: nvm install 22  (or brew install node, apt install nodejs)"
+  if ! command -v node >/dev/null 2>&1; then
+    die "Node is not installed. On Ubuntu, install Node ≥ 20 with:
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+  Or use nvm:
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    nvm install 22"
+  fi
   command -v npm  >/dev/null 2>&1 || die "npm is not installed. Reinstall Node from https://nodejs.org/"
   local v
   v="$(node --version | sed 's/^v//')"
   local major="${v%%.*}"
   if [ "$major" -lt 20 ]; then
-    die "Node $v is too old. DeckPilot needs Node ≥ 20. Try: nvm install 22"
+    die "Node $v is too old. DeckPilot needs Node ≥ 20. On Ubuntu, install Node 22 from NodeSource (see above) or 'nvm install 22'."
   fi
   ok "Node $v"
+
+  if [ "$BOOTSTRAP" -eq 1 ] && ! command -v git >/dev/null 2>&1; then
+    die "git is not installed (needed for bootstrap clone). On Ubuntu: sudo apt-get install -y git"
+  fi
+}
+
+# ---------- bootstrap ----------
+bootstrap() {
+  [ "$BOOTSTRAP" -eq 1 ] || return 0
+  step "Bootstrap clone → $REPO_DIR"
+  mkdir -p "$(dirname "$REPO_DIR")"
+  if [ -d "$REPO_DIR/.git" ]; then
+    (cd "$REPO_DIR" && git fetch --depth=1 origin "$REF" && git checkout -q "$REF" && git reset --hard "origin/$REF") >/dev/null
+    ok "Updated existing clone at $REPO_DIR (ref: $REF)"
+  else
+    if [ -e "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
+      die "$REPO_DIR exists and is not a git checkout. Set DECKPILOT_INSTALL_DIR or remove it."
+    fi
+    git clone --depth=1 --branch "$REF" "$REPO_URL" "$REPO_DIR" >/dev/null 2>&1 \
+      || die "git clone failed for $REPO_URL (ref $REF)"
+    ok "Cloned $REPO_URL@$REF → $REPO_DIR"
+  fi
 }
 
 # ---------- build ----------
@@ -126,12 +190,21 @@ link_system() {
 # ---------- uninstall ----------
 do_uninstall() {
   step "Uninstalling DeckPilot"
-  (cd "$REPO_DIR" && npm unlink -g deckpilot 2>/dev/null) || true
+  (cd "$REPO_DIR" 2>/dev/null && npm unlink -g deckpilot 2>/dev/null) || true
+  # Fallback: nuke any global symlink even if npm link state is gone.
+  local prefix
+  prefix="$(npm prefix -g 2>/dev/null || true)"
+  [ -n "$prefix" ] && [ -L "$prefix/bin/deckpilot" ] && rm -f "$prefix/bin/deckpilot"
   if [ -L "$SYSTEM_LINK" ]; then
     sudo rm -f "$SYSTEM_LINK"
     ok "Removed $SYSTEM_LINK"
   fi
-  ok "Done. (Node modules in this repo were left intact — delete the repo if you want them gone.)"
+  # Remove the bootstrap clone if this run was piped (or if the default path is used).
+  if [ "$BOOTSTRAP" -eq 1 ] && [ -d "$REPO_DIR/.git" ]; then
+    rm -rf "$REPO_DIR"
+    ok "Removed bootstrap checkout at $REPO_DIR"
+  fi
+  ok "Done."
   exit 0
 }
 
@@ -155,6 +228,7 @@ if [ "$ACTION" = "uninstall" ]; then
 fi
 
 preflight
+bootstrap
 build
 
 case "$MODE" in
@@ -166,8 +240,10 @@ smoke
 
 say ""
 say "${B}DeckPilot is ready.${X}"
+[ "$BOOTSTRAP" -eq 1 ] && say "  Source checkout: ${B}$REPO_DIR${X}"
 say "  Try: ${B}deckpilot doctor${X}     # preflight diagnostics"
 say "       ${B}deckpilot auth login${X} # if you haven't authenticated Copilot CLI yet"
 say "       ${B}deckpilot${X}            # enter the chat loop"
 say ""
-say "${D}To uninstall: ./install.sh --uninstall${X}"
+say "${D}To uninstall: curl -fsSL $REPO_URL/raw/$REF/install.sh | bash -s -- --uninstall${X}"
+say "${D}    or from the cloned repo: ./install.sh --uninstall${X}"
