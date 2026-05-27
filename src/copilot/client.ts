@@ -23,7 +23,12 @@ export type DeckPilotClient = {
   listModels: () => Promise<ModelInfo[]>;
 };
 
-export const DEFAULT_MODEL = 'claude-sonnet-4.5';
+/**
+ * Display label used when the SDK has not yet reported an active model. Once
+ * the session emits its first `session.model_change` event (or the first
+ * assistant message arrives), the real model id replaces this label.
+ */
+export const UNKNOWN_MODEL_LABEL = '(copilot default)';
 
 export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
   const { token } = resolveGitHubToken(opts.gitHubToken);
@@ -44,8 +49,12 @@ export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
       for (const e of errs) log.warn('SDK stop error:', e?.message ?? e);
     },
     async createSession(o) {
+      // Important: pass `model` through only when the caller explicitly set
+      // one. Omitting it lets the SDK use whatever the user has configured in
+      // their Copilot CLI (`~/.copilot/config.json` / interactive `/model`
+      // selection). Forcing a default here would shadow that choice.
       const session = await client.createSession({
-        model: o.model ?? DEFAULT_MODEL,
+        ...(o.model ? { model: o.model } : {}),
         tools: o.tools,
         onPermissionRequest: approveAll,
         streaming: true,

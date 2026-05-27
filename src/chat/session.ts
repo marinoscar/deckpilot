@@ -1,6 +1,6 @@
 import type { CopilotSession, ModelInfo } from '@github/copilot-sdk';
 import type { DeckPilotClient } from '../copilot/client.js';
-import { DEFAULT_MODEL } from '../copilot/client.js';
+import { UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
 import { buildToolRegistry } from '../copilot/tools.js';
 import { M1_SYSTEM_PROMPT } from './system-prompt.js';
 import { log } from '../util/logger.js';
@@ -25,22 +25,26 @@ export class ChatSession {
   private session: CopilotSession | null = null;
   private streamingId: string | null = null;
   private nextId = 1;
-  private model: string;
+  /** Model the user requested at startup (via `--model`). `undefined` means "use the Copilot CLI's configured default". */
+  private requestedModel: string | undefined;
+  /** Model the SDK has actually reported as active. Empty until the first session.model_change event arrives. */
+  private activeModel: string | null = null;
 
   constructor(
     private readonly dp: DeckPilotClient,
     opts: ChatSessionOptions = {},
   ) {
-    this.model = opts.model ?? DEFAULT_MODEL;
+    this.requestedModel = opts.model;
+    this.activeModel = opts.model ?? null;
   }
 
   getModel(): string {
-    return this.model;
+    return this.activeModel ?? UNKNOWN_MODEL_LABEL;
   }
 
   onModelChange(fn: ModelListener): () => void {
     this.modelListeners.add(fn);
-    fn(this.model);
+    fn(this.getModel());
     return () => {
       this.modelListeners.delete(fn);
     };
@@ -52,68 +56,37 @@ export class ChatSession {
 
   async start(): Promise<void> {
     await this.dp.start();
-    await this.openSession(this.model);
-  }
-
-  /**
-   * Switch to a different model. The Copilot SDK fixes the model at
-   * `createSession()` time, so this disconnects the current session, opens a
-   * new one with the requested model, and emits a system message warning
-   * that the conversation has been reset (the new model has no memory of
-   * prior turns).
-   *
-   * On failure (unknown id, network, …) the previous session is left intact
-   * and an error system-message is pushed.
-   */
-  async switchModel(newModel: string): Promise<void> {
-    const trimmed = newModel.trim();
-    if (!trimmed) return;
-    if (trimmed === this.model) {
-      this.addSystemMessage(`Already using ${trimmed}.`);
-      return;
-    }
-    const prevModel = this.model;
-    const prevSession = this.session;
-    try {
-      try {
-        await prevSession?.disconnect();
-      } catch (e) {
-        log.warn('disconnect during switchModel failed:', (e as Error).message);
-      }
-      this.session = null;
-      await this.openSession(trimmed);
-      this.addSystemMessage(
-        `Switched model → ${trimmed}. The Copilot SDK does not carry conversation across sessions, so the new model has no memory of prior turns.`,
-      );
-    } catch (e) {
-      this.model = prevModel;
-      if (!this.session) {
-        try {
-          await this.openSession(prevModel);
-        } catch (e2) {
-          this.addSystemMessage(
-            `Failed to switch to ${trimmed} (${(e as Error).message}) and could not restore previous session (${(e2 as Error).message}). Restart DeckPilot.`,
-          );
-          return;
-        }
-      }
-      this.addSystemMessage(
-        `Could not switch to ${trimmed}: ${(e as Error).message}. Staying on ${prevModel}.`,
-      );
-    }
-  }
-
-  private async openSession(model: string): Promise<void> {
     this.session = await this.dp.createSession({
       systemPrompt: M1_SYSTEM_PROMPT,
       tools: buildToolRegistry(),
       streaming: true,
-      model,
+      model: this.requestedModel,
     });
     this.attachEvents(this.session);
-    this.model = model;
-    this.streamingId = null;
-    for (const fn of this.modelListeners) fn(model);
+  }
+
+  /**
+   * Switch the active model. Uses the SDK's `session.setModel()` which takes
+   * effect on the next message AND preserves conversation history — no
+   * disconnect/recreate required. The actual model id displayed in the UI
+   * updates when the SDK emits `session.model_change`.
+   */
+  async switchModel(newModel: string): Promise<void> {
+    if (!this.session) throw new Error('Session not started');
+    const trimmed = newModel.trim();
+    if (!trimmed) return;
+    if (trimmed === this.activeModel) {
+      this.addSystemMessage(`Already using ${trimmed}.`);
+      return;
+    }
+    try {
+      await this.session.setModel(trimmed);
+      // The model_change event will update this.activeModel and fire
+      // modelListeners; we just confirm the request landed.
+      this.addSystemMessage(`Requested model → ${trimmed}. Takes effect on the next message.`);
+    } catch (e) {
+      this.addSystemMessage(`Could not switch to ${trimmed}: ${(e as Error).message}`);
+    }
   }
 
   async stop(): Promise<void> {
@@ -193,6 +166,17 @@ export class ChatSession {
     session.on('session.idle', () => {
       this.streamingId = null;
       this.emit();
+    });
+    session.on('session.model_change', (event) => {
+      const data = event.data as { newModel?: string; previousModel?: string; cause?: string };
+      if (!data.newModel) return;
+      this.activeModel = data.newModel;
+      if (data.cause === 'rate_limit_auto_switch' && data.previousModel) {
+        this.addSystemMessage(
+          `Copilot auto-switched model from ${data.previousModel} → ${data.newModel} (rate limit).`,
+        );
+      }
+      for (const fn of this.modelListeners) fn(data.newModel);
     });
   }
 

@@ -1,9 +1,9 @@
 import { BaseCommand } from '../cli/base-command.js';
-import { createClient, DEFAULT_MODEL } from '../copilot/client.js';
+import { createClient } from '../copilot/client.js';
 
 export default class Models extends BaseCommand {
   static override description =
-    'List LLM models available to DeckPilot via the Copilot SDK. The default model is marked with *.';
+    'List LLM models available to DeckPilot via the Copilot SDK. The active model is whatever your Copilot CLI is configured to use; run `deckpilot` and `/model` to inspect or switch it from the chat.';
 
   static override examples = ['<%= config.bin %> models'];
 
@@ -25,11 +25,10 @@ export default class Models extends BaseCommand {
       }
       const idW = Math.max(...models.map((m) => m.id.length));
       for (const m of models) {
-        const marker = m.id === DEFAULT_MODEL ? '*' : ' ';
         const reasoning = m.supportedReasoningEfforts?.length
           ? ` (reasoning: ${m.supportedReasoningEfforts.join(', ')})`
           : '';
-        this.log(`${marker} ${m.id.padEnd(idW)}  ${m.name}${reasoning}`);
+        this.log(`  ${m.id.padEnd(idW)}  ${m.name}${reasoning}`);
       }
     } catch (e) {
       this.fail(`listModels failed: ${(e as Error).message}`);
