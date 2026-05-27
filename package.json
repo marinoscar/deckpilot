@@ -1,0 +1,66 @@
+{
+  "name": "deckpilot",
+  "version": "0.1.0",
+  "description": "Conversational CLI that turns chat into polished PowerPoint decks, powered by the GitHub Copilot SDK.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "deckpilot": "./bin/run.js"
+  },
+  "files": [
+    "/bin",
+    "/dist",
+    "/templates",
+    "/oclif.manifest.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --import tsx/esm bin/dev.js",
+    "lint": "biome check src test",
+    "format": "biome format --write src test",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "manifest": "oclif manifest",
+    "prepack": "npm run build && npm run manifest",
+    "postpack": "rm -f oclif.manifest.json"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "^1.0.0-beta.8",
+    "@oclif/core": "^4.11.4",
+    "@oclif/plugin-autocomplete": "^3.2.0",
+    "@oclif/plugin-help": "^6.2.0",
+    "fast-xml-parser": "^4.5.0",
+    "ink": "^7.0.4",
+    "jszip": "^3.10.1",
+    "pptxgenjs": "^4.0.1",
+    "react": "^19.2.0",
+    "zod": "^4.3.6",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "oclif": "^4.18.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "oclif": {
+    "bin": "deckpilot",
+    "dirname": "deckpilot",
+    "commands": "./dist/commands",
+    "plugins": [
+      "@oclif/plugin-help",
+      "@oclif/plugin-autocomplete"
+    ],
+    "topicSeparator": " ",
+    "hooks": {
+      "init": "./dist/cli/hooks/init.js"
+    }
+  }
+}
