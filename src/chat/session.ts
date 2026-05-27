@@ -15,12 +15,8 @@ import { summarizeTemplate } from '../template/profile.js';
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
-
-export type TranscriptEntry =
-  | { kind: 'user'; id: string; text: string }
-  | { kind: 'assistant'; id: string; text: string; streaming: boolean }
-  | { kind: 'tool'; id: string; tool: string; status: 'start' | 'done' | 'error'; detail?: string }
-  | { kind: 'system'; id: string; text: string };
+import type { TranscriptEntry } from './session-types.js';
+export type { TranscriptEntry };
 
 export type SessionListener = (entries: TranscriptEntry[]) => void;
 export type ModelListener = (model: string) => void;
