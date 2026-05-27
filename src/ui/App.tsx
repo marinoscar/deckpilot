@@ -5,6 +5,7 @@ import { parseSlash, HELP_TEXT } from '../chat/slash.js';
 import { Transcript } from './Transcript.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
+import { ThinkingIndicator } from './ThinkingIndicator.js';
 import { renderSampleDeck } from '../render/renderer.js';
 
 type Status = 'idle' | 'streaming' | 'cancelled' | 'error';
@@ -20,6 +21,22 @@ export const App: React.FC<Props> = ({ session }) => {
 
   useEffect(() => session.subscribe(setEntries), [session]);
   useEffect(() => session.onModelChange(setModel), [session]);
+  // Drive status from the session's busy flag — `session.send()` returns as
+  // soon as the message is queued, so the only authoritative signal that the
+  // agent has finished is the SDK's `session.idle` event (mapped to busy=false).
+  useEffect(
+    () =>
+      session.onBusyChange((busy) => {
+        setStatus((prev) => {
+          if (busy) return 'streaming';
+          // Don't clobber 'error' on idle — let the user see the error until
+          // they send another message.
+          if (prev === 'error') return 'error';
+          return 'idle';
+        });
+      }),
+    [session],
+  );
 
   useInput(async (input, key) => {
     if (key.ctrl && (input === 'c' || input === '\x03')) {
@@ -47,10 +64,9 @@ export const App: React.FC<Props> = ({ session }) => {
       await handleSlash(slash, text);
       return;
     }
-    setStatus('streaming');
     try {
+      // Status transitions are driven by session.onBusyChange.
       await session.sendUserMessage(text);
-      setStatus('idle');
     } catch (e) {
       setStatus('error');
       session.addSystemMessage(`error: ${(e as Error).message}`);
@@ -130,7 +146,11 @@ export const App: React.FC<Props> = ({ session }) => {
       </Box>
       <Transcript entries={entries} />
       <Box marginTop={1} flexDirection="column">
-        <Prompt disabled={status === 'streaming'} onSubmit={handleSubmit} />
+        {status === 'streaming' ? (
+          <ThinkingIndicator />
+        ) : (
+          <Prompt disabled={false} onSubmit={handleSubmit} />
+        )}
         <StatusBar status={status} model={model} />
       </Box>
     </Box>

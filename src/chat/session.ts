@@ -13,6 +13,7 @@ export type TranscriptEntry =
 
 export type SessionListener = (entries: TranscriptEntry[]) => void;
 export type ModelListener = (model: string) => void;
+export type BusyListener = (busy: boolean) => void;
 
 export type ChatSessionOptions = {
   model?: string;
@@ -22,6 +23,8 @@ export class ChatSession {
   private transcript: TranscriptEntry[] = [];
   private listeners = new Set<SessionListener>();
   private modelListeners = new Set<ModelListener>();
+  private busyListeners = new Set<BusyListener>();
+  private busy = false;
   private session: CopilotSession | null = null;
   private streamingId: string | null = null;
   private nextId = 1;
@@ -48,6 +51,24 @@ export class ChatSession {
     return () => {
       this.modelListeners.delete(fn);
     };
+  }
+
+  isBusy(): boolean {
+    return this.busy;
+  }
+
+  onBusyChange(fn: BusyListener): () => void {
+    this.busyListeners.add(fn);
+    fn(this.busy);
+    return () => {
+      this.busyListeners.delete(fn);
+    };
+  }
+
+  private setBusy(next: boolean): void {
+    if (this.busy === next) return;
+    this.busy = next;
+    for (const fn of this.busyListeners) fn(next);
   }
 
   async listModels(): Promise<ModelInfo[]> {
@@ -117,7 +138,16 @@ export class ChatSession {
   async sendUserMessage(text: string): Promise<void> {
     if (!this.session) throw new Error('Session not started');
     this.push({ kind: 'user', id: this.id(), text });
-    await this.session.send({ prompt: text });
+    this.setBusy(true);
+    try {
+      await this.session.send({ prompt: text });
+    } catch (e) {
+      // `send()` returns as soon as the message is queued, but if even that
+      // queueing fails we have to clear `busy` ourselves — no `session.idle`
+      // event will fire to do it for us.
+      this.setBusy(false);
+      throw e;
+    }
   }
 
   async cancel(): Promise<void> {
@@ -127,6 +157,7 @@ export class ChatSession {
     } catch (e) {
       log.warn('session.abort failed:', (e as Error).message);
     }
+    this.setBusy(false);
   }
 
   clear(): void {
@@ -165,6 +196,7 @@ export class ChatSession {
     });
     session.on('session.idle', () => {
       this.streamingId = null;
+      this.setBusy(false);
       this.emit();
     });
     session.on('session.model_change', (event) => {
