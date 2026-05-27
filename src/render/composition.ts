@@ -14,6 +14,7 @@ import type {
   StepItem,
 } from '../deck/schema.js';
 import {
+  drawCalloutBar,
   drawCard,
   drawCtaPill,
   drawGlyph,
@@ -109,7 +110,7 @@ function renderGrid(
   for (let i = 0; i < items.length && i < cols; i++) {
     const item = items[i]!;
     const x = frame.x + i * (cardW + COL_GAP);
-    drawGridItem(slide, item, x, frame.y, cardW, cardH, design);
+    drawGridItem(slide, item, x, frame.y, cardW, cardH, design, cols);
   }
 }
 
@@ -121,10 +122,13 @@ function drawGridItem(
   w: number,
   h: number,
   design: DesignSystem,
+  columns: 2 | 3 | 4,
 ): void {
   const accentHex = item.accent === 'alt' ? design.accentAlt : design.accent;
   const tintHex = item.accent === 'alt' ? design.cardTintAlt : design.cardTint;
 
+  // Cards are flat against the tinted background — no shadow by default
+  // (matches the editorial reference look).
   drawCard(slide, {
     x,
     y,
@@ -133,106 +137,143 @@ function drawGridItem(
     accentHex,
     tintHex,
     style: design.cardStyle,
-    shadow: 'soft',
+    shadow: 'none',
   });
 
-  // Inner padding cursor
+  // Inner padding region. We split it into THREE vertical regions:
+  //   topRegion    — kicker + (number badge OR glyph, decoration only)
+  //   middleRegion — title + body
+  //   bottomRegion — CTA pill (or empty)
   const innerX = x + CARD_PADDING;
   const innerW = w - CARD_PADDING * 2;
-  let cursorY = y + CARD_PADDING;
+  const topY = y + CARD_PADDING;
+  const bottomY = y + h - CARD_PADDING;
+  const ctaH = item.cta ? 0.5 : 0;
 
-  // Optional kicker
+  // ---- top region: kicker (left) + decoration (right or centered top) ----
+
+  let topUsedH = 0;
   if (item.kicker && design.useKickers !== false) {
     drawKicker(slide, {
       x: innerX,
-      y: cursorY,
-      w: innerW,
+      y: topY,
+      w: innerW * 0.7, // leave room on the right for badge/glyph
       text: item.kicker,
       accentHex,
       fontFace: design.fontHeading,
     });
-    cursorY += 0.4;
+    topUsedH = 0.4;
   }
 
-  // Optional number badge (rendered top-right of card, doesn't push cursor)
+  // Number badge — placement depends on cardStyle.
+  // - top-bar: centered horizontally at the top (image-2 progression look)
+  // - side-bar / plain: top-right (image-1 style hint card)
   if (item.number) {
-    const size = 0.6;
-    drawNumberedBadge(slide, {
-      x: x + w - CARD_PADDING - size,
-      y: y + CARD_PADDING - 0.05,
-      size,
-      label: item.number,
-      accentHex,
-      fillHex: 'FFFFFF',
-      style: design.numberStyle,
-      fontFace: design.fontHeading,
-    });
+    const size = columns >= 4 ? 0.6 : columns === 3 ? 0.66 : 0.74;
+    if (design.cardStyle === 'top-bar') {
+      const badgeX = x + (w - size) / 2;
+      drawNumberedBadge(slide, {
+        x: badgeX,
+        y: topY + 0.15, // a touch below the top accent strip
+        size,
+        label: item.number,
+        accentHex,
+        fillHex: 'FFFFFF',
+        style: design.numberStyle,
+        fontFace: design.fontHeading,
+      });
+      topUsedH = Math.max(topUsedH, size + 0.25);
+    } else {
+      drawNumberedBadge(slide, {
+        x: x + w - CARD_PADDING - size,
+        y: topY - 0.05,
+        size,
+        label: item.number,
+        accentHex,
+        fillHex: 'FFFFFF',
+        style: design.numberStyle,
+        fontFace: design.fontHeading,
+      });
+      topUsedH = Math.max(topUsedH, size + 0.15);
+    }
   }
 
-  // Optional glyph (rendered top-right of card if no number)
+  // Glyph — top-right, only when no number is present.
   if (item.glyph && !item.number) {
-    const glyphSize = 0.9;
+    const glyphSize = columns >= 4 ? 0.7 : columns === 3 ? 0.85 : 1.0;
     drawGlyph(slide, item.glyph, {
       x: x + w - CARD_PADDING - glyphSize,
-      y: y + CARD_PADDING,
+      y: topY + (topUsedH > 0 ? 0 : 0),
       w: glyphSize,
       h: glyphSize,
       accentHex,
       mutedHex: design.muted,
     });
+    topUsedH = Math.max(topUsedH, glyphSize + 0.15);
   }
 
-  // Title — big bold statement, dominant element.
-  const titleY = cursorY + (item.number || item.glyph ? 0.5 : 0);
-  const titleSize = pickTitleSize(item.title, w);
+  // ---- middle region: title + body ----
+
+  const middleY = topY + topUsedH;
+  const middleH = bottomY - middleY - ctaH - (item.cta ? 0.15 : 0);
+
+  // For top-bar grids with a centered number badge, the title should be
+  // centered too — matches the image-2 progression look.
+  const centerEverything = design.cardStyle === 'top-bar' && !!item.number;
+  const titleSize = pickTitleSize(item.title, columns);
+  const titleH = Math.min(middleH * 0.55, titleSize * 0.04 + 0.4);
   slide.addText(item.title, {
     x: innerX,
-    y: titleY,
+    y: middleY,
     w: innerW,
-    h: 1.4,
+    h: titleH,
     fontFace: design.fontHeading,
     fontSize: titleSize,
     bold: true,
     color: accentHex,
-    align: 'left',
+    align: centerEverything ? 'center' : 'left',
     valign: 'top',
   });
-  cursorY = titleY + Math.max(1.0, titleSize * 0.045);
 
-  // Body — paragraph or bullets
+  // Body fills the gap between title and CTA/bottom.
   if (item.body) {
-    const bodyH = h - (cursorY - y) - CARD_PADDING - (item.cta ? 0.65 : 0);
+    const bodyY = middleY + titleH + 0.1;
+    const bodyH = bottomY - bodyY - ctaH - (item.cta ? 0.15 : 0);
+    const bodyFontSize = columns >= 4 ? 12 : columns === 3 ? 13 : 15;
     if (Array.isArray(item.body)) {
       slide.addText(bulletsToTextProps(item.body, design), {
         x: innerX,
-        y: cursorY,
+        y: bodyY,
         w: innerW,
         h: bodyH,
         fontFace: design.fontBody,
-        fontSize: 14,
+        fontSize: bodyFontSize,
         color: design.ink,
         valign: 'top',
         paraSpaceAfter: 4,
+        align: centerEverything ? 'center' : 'left',
       });
     } else {
       slide.addText(item.body, {
         x: innerX,
-        y: cursorY,
+        y: bodyY,
         w: innerW,
         h: bodyH,
         fontFace: design.fontBody,
-        fontSize: 14,
+        fontSize: bodyFontSize,
         color: design.ink,
         valign: 'top',
+        align: centerEverything ? 'center' : 'left',
       });
     }
   }
 
-  // CTA pill at the bottom of the card
+  // ---- bottom region: CTA pill ----
+
   if (item.cta) {
     drawCtaPill(slide, {
       x: innerX,
-      y: y + h - CARD_PADDING - 0.45,
+      y: bottomY - 0.5,
       w: innerW,
       text: item.cta,
       accentHex,
@@ -241,13 +282,25 @@ function drawGridItem(
   }
 }
 
-/** Roughly-fit title size so longer titles don't overflow a card. */
-function pickTitleSize(text: string, cardW: number): number {
-  const len = text.length;
-  // Wider cards can afford bigger titles.
-  if (cardW > 5) return len > 30 ? 26 : 32;
-  if (cardW > 3.5) return len > 24 ? 20 : 26;
-  return len > 18 ? 16 : 20;
+/**
+ * Roughly-fit title size based on the card's column count.
+ *
+ * Sizes tuned against reference image 1 (2-col cards with ~56pt titles like
+ * "A shared dictionary.") and image 2 (4-col cards with ~28pt centered
+ * titles like "DATA" / "INTELLIGENCE"). Short titles get a bigger size; long
+ * titles step down so they don't overflow the card.
+ *
+ *   columns = 2 → 48pt (short) / 36pt (long)
+ *   columns = 3 → 32pt (short) / 26pt (long)
+ *   columns = 4 → 26pt (short) / 20pt (long)
+ *
+ * "Short" = ≤ 22 characters.
+ */
+function pickTitleSize(text: string, columns: 2 | 3 | 4): number {
+  const short = text.length <= 22;
+  if (columns === 2) return short ? 48 : 36;
+  if (columns === 3) return short ? 32 : 26;
+  return short ? 26 : 20;
 }
 
 // ---------- steps ----------
@@ -323,32 +376,29 @@ function renderCallout(
   frame: CompositionFrame,
   design: DesignSystem,
 ): void {
-  let cursorY = frame.y + frame.h * 0.2;
-  if (body.lead) {
-    slide.addText(body.lead, {
-      x: frame.x,
-      y: cursorY,
-      w: frame.w,
-      h: 0.6,
-      fontFace: design.fontBody,
-      fontSize: 16,
-      color: design.muted,
-      italic: true,
-      align: 'left',
-    });
-    cursorY += 0.6;
-  }
-  slide.addText(body.statement, {
-    x: frame.x,
-    y: cursorY,
-    w: frame.w,
-    h: frame.h - (cursorY - frame.y),
-    fontFace: design.fontHeading,
-    fontSize: body.statement.length > 120 ? 28 : body.statement.length > 80 ? 36 : 44,
-    bold: true,
-    color: design.accent,
-    align: 'left',
-    valign: 'top',
+  // Image-2's "Bottom line:" bar is the canonical callout look — full-width
+  // dark navy band with an accentAlt left edge, bold lead in accentAlt,
+  // white body text. drawCalloutBar handles the whole composition; we just
+  // need to anchor it within the available frame.
+  //
+  // We pin the bar to the bottom of the frame and reserve a comfortable
+  // height so longer statements have room to breathe. The frame's `x`/`w`
+  // are mostly ignored — drawCalloutBar manages its own horizontal margin
+  // against the slide width so it always looks full-bleed against the
+  // editorial design.
+  const barH = body.statement.length > 120 ? 1.1 : 0.85;
+  // Slide width is the canonical 13.333 from theme.ts; the drawCalloutBar
+  // primitive uses its own SIDE_MARGIN.
+  const slideW = 13.333;
+  const y = frame.y + frame.h - barH;
+  drawCalloutBar(slide, {
+    slideW,
+    y,
+    h: barH,
+    statement: body.statement,
+    lead: body.lead,
+    theme: design,
+    edgeAccent: 'alt',
   });
 }
 

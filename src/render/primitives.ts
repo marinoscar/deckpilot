@@ -20,10 +20,10 @@ export type Slide = any;
 
 // ---------- shared constants ----------
 
-export const SIDE_BAR_W = 0.1; // width of the vertical accent strip on cards
-export const TOP_BAR_H = 0.1; // height of the horizontal accent strip on cards
-export const CARD_RADIUS = 0.06; // inches of corner rounding on cards/pills
-export const PILL_RADIUS = 0.18; // pills are more rounded than cards
+export const SIDE_BAR_W = 0.18; // width of the vertical accent strip on cards (bold, image-1 reference)
+export const TOP_BAR_H = 0.12; // height of the horizontal accent strip on cards
+export const CARD_RADIUS = 0.06; // inches of corner rounding on cards
+export const PILL_RADIUS = 0.05; // CTA pills near-rectangular (image-1 reference)
 
 const SHADOW_SOFT = (): Record<string, unknown> => ({
   type: 'outer',
@@ -68,7 +68,9 @@ export type CardOpts = {
  */
 export function drawCard(slide: Slide, opts: CardOpts): void {
   const style = opts.style ?? 'side-bar';
-  const shadowKind = opts.shadow ?? 'soft';
+  // Default is no shadow — reference editorial designs have flat cards on
+  // tinted backgrounds. Callers can opt into 'soft' or 'medium' explicitly.
+  const shadowKind = opts.shadow ?? 'none';
 
   // 1) Background — rounded rect with tint fill and optional drop shadow.
   slide.addShape('roundRect', {
