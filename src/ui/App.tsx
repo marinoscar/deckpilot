@@ -15,9 +15,11 @@ export const App: React.FC<Props> = ({ session }) => {
   const { exit } = useApp();
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [status, setStatus] = useState<Status>('idle');
+  const [model, setModel] = useState<string>(session.getModel());
   const lastCtrlC = useRef<number>(0);
 
   useEffect(() => session.subscribe(setEntries), [session]);
+  useEffect(() => session.onModelChange(setModel), [session]);
 
   useInput(async (input, key) => {
     if (key.ctrl && (input === 'c' || input === '\x03')) {
@@ -80,6 +82,32 @@ export const App: React.FC<Props> = ({ session }) => {
         }
         return;
       }
+      case 'model': {
+        if (!slash.id) {
+          session.addSystemMessage(`Current model: ${session.getModel()}`);
+          return;
+        }
+        session.addSystemMessage(`Switching model → ${slash.id} …`);
+        await session.switchModel(slash.id);
+        return;
+      }
+      case 'models': {
+        session.addSystemMessage('Fetching model list …');
+        try {
+          const models = await session.listModels();
+          const cur = session.getModel();
+          const lines = models.map((m) => {
+            const marker = m.id === cur ? '* ' : '  ';
+            return `${marker}${m.id.padEnd(30)} ${m.name}`;
+          });
+          session.addSystemMessage(
+            `Available models (use /model <id> to switch):\n${lines.join('\n')}`,
+          );
+        } catch (e) {
+          session.addSystemMessage(`Could not list models: ${(e as Error).message}`);
+        }
+        return;
+      }
       case 'quit':
         await session.stop();
         exit();
@@ -103,7 +131,7 @@ export const App: React.FC<Props> = ({ session }) => {
       <Transcript entries={entries} />
       <Box marginTop={1} flexDirection="column">
         <Prompt disabled={status === 'streaming'} onSubmit={handleSubmit} />
-        <StatusBar status={status} />
+        <StatusBar status={status} model={model} />
       </Box>
     </Box>
   );

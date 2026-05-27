@@ -1,5 +1,5 @@
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
-import type { CopilotSession, Tool } from '@github/copilot-sdk';
+import type { CopilotSession, ModelInfo, Tool } from '@github/copilot-sdk';
 import { resolveGitHubToken } from './auth.js';
 import { log } from '../util/logger.js';
 
@@ -20,6 +20,7 @@ export type DeckPilotClient = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   createSession: (opts: CreateSessionOptions) => Promise<CopilotSession>;
+  listModels: () => Promise<ModelInfo[]>;
 };
 
 export const DEFAULT_MODEL = 'claude-sonnet-4.5';
@@ -56,6 +57,9 @@ export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
           : undefined,
       });
       return session;
+    },
+    async listModels() {
+      return client.listModels();
     },
   };
 }

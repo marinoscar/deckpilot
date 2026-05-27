@@ -15,7 +15,16 @@ const hook: Hook<'init'> = async function (opts) {
   const first = argv[0];
   if (first === undefined) return;
   if (first.startsWith('-')) return;
-  const known = new Set(['chat', 'auth', 'doctor', 'help', 'autocomplete', 'version', 'ver']);
+  const known = new Set([
+    'chat',
+    'auth',
+    'doctor',
+    'help',
+    'autocomplete',
+    'version',
+    'ver',
+    'models',
+  ]);
   if (!known.has(first)) return;
 };
 

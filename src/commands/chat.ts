@@ -30,7 +30,7 @@ export default class Chat extends BaseCommand {
   async run(): Promise<void> {
     const { flags } = await this.parse(Chat);
     const dp = createClient({ gitHubToken: flags.token });
-    const session = new ChatSession(dp);
+    const session = new ChatSession(dp, { model: flags.model });
 
     try {
       await session.start();
