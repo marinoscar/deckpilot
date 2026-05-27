@@ -23,6 +23,10 @@
 
 set -euo pipefail
 
+# Bumped on every release of the installer. Printed at the top of every run so
+# users can confirm what they're actually executing (CDN cache misses are real).
+INSTALL_SCRIPT_VERSION="0.1.1"
+
 MODE="user"
 SKIP_BUILD=0
 QUIET=0
@@ -267,6 +271,10 @@ smoke() {
 }
 
 # ---------- main ----------
+# Always announce which installer is running. This is intentionally before any
+# other output so a stale CDN cache is obvious at a glance.
+printf '%sDeckPilot installer%s v%s\n' "$B" "$X" "$INSTALL_SCRIPT_VERSION"
+
 if [ "$ACTION" = "uninstall" ]; then
   do_uninstall
 fi
