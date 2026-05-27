@@ -29,7 +29,12 @@ export type ChatSessionOptions = {
   model?: string;
   /** Path to a `.pptx` whose theme/fonts should be inherited at startup. */
   templatePath?: string;
+  /** How many render_slide_preview calls the LLM is allowed per slide. 0 disables. */
+  critiquePassesPerSlide?: number;
 };
+
+/** Hard ceiling on critique passes. The model can't grind forever. */
+const MAX_CRITIQUE_PASSES = 5;
 
 /** Maximum SlidePlan revisions we keep around for `/undo`. */
 const UNDO_DEPTH = 20;
@@ -67,6 +72,11 @@ export class ChatSession {
    */
   private designSystem: DesignSystem | null = null;
 
+  /** Per-slide critique pass budget. Clamped to [0, MAX_CRITIQUE_PASSES]. */
+  private critiquePasses = 1;
+  /** Per-slide count of preview-render calls already consumed. */
+  private critiqueUsage = new Map<string, number>();
+
   constructor(
     private readonly dp: DeckPilotClient,
     opts: ChatSessionOptions = {},
@@ -74,6 +84,9 @@ export class ChatSession {
     this.requestedModel = opts.model;
     this.activeModel = opts.model ?? null;
     this.requestedTemplatePath = opts.templatePath;
+    if (typeof opts.critiquePassesPerSlide === 'number') {
+      this.critiquePasses = clampCritique(opts.critiquePassesPerSlide);
+    }
   }
 
   getModel(): string {
@@ -222,6 +235,33 @@ export class ChatSession {
     this.designSystem = ds;
   }
 
+  // ---- critique state ----
+
+  getCritiquePasses(): number {
+    return this.critiquePasses;
+  }
+
+  setCritiquePasses(n: number): number {
+    this.critiquePasses = clampCritique(n);
+    // Reset per-slide tallies whenever the budget changes — fairer mid-session.
+    this.critiqueUsage.clear();
+    return this.critiquePasses;
+  }
+
+  /** Consume one critique pass for a slide. Returns whether the call was allowed and how many remain. */
+  consumeCritiquePass(slideId: string): { allowed: boolean; remaining: number } {
+    if (this.critiquePasses <= 0) return { allowed: false, remaining: 0 };
+    const used = this.critiqueUsage.get(slideId) ?? 0;
+    if (used >= this.critiquePasses) return { allowed: false, remaining: 0 };
+    this.critiqueUsage.set(slideId, used + 1);
+    return { allowed: true, remaining: this.critiquePasses - (used + 1) };
+  }
+
+  /** Reset critique usage for a single slide. Used by /critique to force a manual pass. */
+  resetCritiqueUsage(slideId: string): void {
+    this.critiqueUsage.delete(slideId);
+  }
+
   private toolContext(): DeckToolContext {
     return {
       getPlan: () => this.plan,
@@ -232,6 +272,8 @@ export class ChatSession {
       loadTemplate: (p) => this.loadTemplate(p),
       getDesignSystem: () => this.designSystem,
       setDesignSystem: (ds) => this.setDesignSystem(ds),
+      critiquePassesPerSlide: () => this.critiquePasses,
+      consumeCritiquePass: (id) => this.consumeCritiquePass(id),
     };
   }
 
@@ -426,4 +468,11 @@ export class ChatSession {
   private id(): string {
     return `e${this.nextId++}`;
   }
+}
+
+function clampCritique(n: number): number {
+  if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > MAX_CRITIQUE_PASSES) return MAX_CRITIQUE_PASSES;
+  return Math.floor(n);
 }

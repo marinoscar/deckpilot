@@ -29,6 +29,14 @@ export default class Chat extends BaseCommand {
       description: 'Path to a .pptx to inherit theme + fonts from (renders will use its style).',
       required: false,
     }),
+    'critique-passes': Flags.integer({
+      description:
+        'How many render_slide_preview passes the model is allowed per slide (0 disables the visual critique loop). Default 1, max 5.',
+      required: false,
+      default: 1,
+      min: 0,
+      max: 5,
+    }),
   };
 
   async run(): Promise<void> {
@@ -37,6 +45,7 @@ export default class Chat extends BaseCommand {
     const session = new ChatSession(dp, {
       model: flags.model,
       templatePath: flags.template,
+      critiquePassesPerSlide: flags['critique-passes'],
     });
 
     try {

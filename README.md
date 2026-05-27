@@ -4,7 +4,7 @@
 
 Have a normal conversation in your terminal — DeckPilot drafts the outline, lets you revise it slide-by-slide, then renders a real `.pptx` you can hand off. Same terminal UX feel as Claude Code or GitHub Copilot CLI, with `pptxgenjs` as the renderer.
 
-> **Status:** M3 — templates + file picker shipped. The agent inherits theme colours and fonts from any user-supplied `.pptx` (style only, slides not imported), reloads previously-saved `.plan.json` files for editing, and the `@` picker surfaces relevant files from the working directory. Charts (M4) are next.
+> **Status:** v0.6 — visual quality overhaul phase 2. The renderer composes cards / kickers / numbered grids / footer bands instead of plain text-on-white, the LLM is governed by a single `DesignSystem` locked in per deck, and the agent can **see its own slides** via LibreOffice-rendered previews and revise them until they look right. Three reference-quality slide types ship in v0.5; the agentic critique loop is new in v0.6.
 
 ---
 
@@ -18,6 +18,7 @@ Have a normal conversation in your terminal — DeckPilot drafts the outline, le
 | **Windows** | **WSL is required** — install [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install), open an Ubuntu shell, then use the Ubuntu instructions below. DeckPilot is a Node + Ink CLI; the Windows console alone is not a supported environment. |
 | **Node.js** | ≥ 20 (the installer will fail loudly if it's missing or too old). |
 | **GitHub Copilot subscription** | Required — DeckPilot drives `@github/copilot-sdk`, which talks to the Copilot CLI runtime and your Copilot entitlement. |
+| **LibreOffice + poppler-utils** (optional) | Needed for the visual critique loop (`render_slide_preview`). On Ubuntu/WSL: `sudo apt install libreoffice poppler-utils`. Without it, DeckPilot still renders decks — just run with `--critique-passes 0` to skip the preview step. |
 
 ### One-liner (recommended)
 
@@ -100,6 +101,8 @@ You drop into an Ink-rendered chat with the Copilot SDK as the brain. Anything y
 | `/load <path>` | Load a previously-saved `.plan.json` as the working plan |
 | `/template <path>` | Inherit theme + fonts from an existing `.pptx` (style only) |
 | `/template` | Show the currently-loaded template |
+| `/critique <id>` | Force the LLM to re-preview a specific slide (resets its budget) |
+| `/critique-passes <n>` | Set how many preview passes per slide (0 disables, max 5) |
 | `/undo` | Roll back the most recent plan change |
 | `/clear` | Reset the transcript (keep the deck plan) |
 | `/new` | Reset everything |
@@ -206,8 +209,10 @@ This unlinks the global binary and removes the bootstrap clone (if any). It does
 
 - ✅ **M1** — Spine: chat loop + streaming + Ctrl+C + slash commands.
 - ✅ **M2** — Outline-first generation: zod-validated `SlidePlan`, LLM tools `propose_outline` / `revise_slide` / `render_deck` / `save_deck`, per-deck `.plan.json` for re-editing.
-- ✅ **M3 (current)** — `.pptx` template inheritance (theme + fonts), `@` file picker, plan reload from `.plan.json`, `inspect_template` tool.
-- 🔜 **M4** — Native charts from structured data (column/line/pie/etc.) + one-shot `deckpilot new "<topic>"` + interactive `deckpilot tutorial`.
+- ✅ **M3** — `.pptx` template inheritance (theme + fonts), `@` file picker, plan reload from `.plan.json`, `inspect_template` tool.
+- ✅ **v0.5 — visual overhaul phase 1** — Renderer rewrite around primitives + composition (cards, grids, kickers, CTA pills, footer bands, glyphs). One deck-wide `DesignSystem` governs every slide.
+- ✅ **v0.6 (current) — visual overhaul phase 2** — Agentic critique loop. The LLM renders each slide to a PNG via LibreOffice (`render_slide_preview` tool), sees its own work, and revises if it's not good enough. `--critique-passes` flag + `/critique` / `/critique-passes` slash commands.
+- 🔜 **v0.7** — Bundled style presets (`editorial`, `minimal-executive`, `energetic-startup`), `DECKPILOT.md` style guide ingestion, optional pre-rendered gradient backgrounds.
 - 🔜 **M5** — Hardening, telemetry opt-in, cross-platform smoke tests, npm publish.
 
 ---

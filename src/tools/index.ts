@@ -14,6 +14,7 @@ import {
 } from '../deck/schema.js';
 import { applySlidePatch, summarizePlan, summarizeSlide } from '../deck/revise.js';
 import { renderPlan } from '../render/renderer.js';
+import { PreviewUnavailableError, isPreviewAvailable, readPng, renderSlideToPng } from '../render/preview.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { summarizeTemplate } from '../template/profile.js';
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -32,6 +33,10 @@ export type DeckToolContext = {
   loadTemplate: (path: string) => Promise<TemplateProfile>;
   getDesignSystem: () => DesignSystem | null;
   setDesignSystem: (ds: DesignSystem) => void;
+  /** Hard cap on render_slide_preview calls per slide. 0 disables the tool entirely. */
+  critiquePassesPerSlide: () => number;
+  /** Tracks how many render_slide_preview calls a given slide has already cost. */
+  consumeCritiquePass: (slideId: string) => { remaining: number; allowed: boolean };
 };
 
 type ToolResult<T = unknown> =
@@ -262,6 +267,100 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
             ok: false,
             error: `Template load failed: ${(e as Error).message}`,
             hint: 'Verify the path is a valid .pptx file.',
+          };
+        }
+      },
+    }) as Tool,
+
+    defineTool('render_slide_preview', {
+      description: [
+        'Render the current state of one slide to a PNG image attached to the tool',
+        'result so YOU can see how it actually looks. Call this after each',
+        'propose_outline or revise_slide where you want to verify the visual.',
+        'Evaluate: type hierarchy clear? grid columns balanced? colour story',
+        'cohesive? CTA pills consistent across siblings? Is the slide AS GOOD AS',
+        'the references the user shared? If not, call revise_slide and re-preview.',
+        'There is a hard budget of N preview calls per slide (default 1, configurable',
+        'via --critique-passes). When you exhaust it, accept the slide and move on.',
+      ].join(' '),
+      parameters: z.object({
+        slideId: z
+          .string()
+          .min(1)
+          .max(32)
+          .describe('The id of the slide to preview. See propose_outline output.'),
+      }),
+      skipPermission: true,
+      handler: async (args, _invocation) => {
+        // Budget check
+        const passes = ctx.critiquePassesPerSlide();
+        if (passes <= 0) {
+          return {
+            textResultForLlm:
+              'Visual critique is disabled (--critique-passes 0). Skip preview and proceed with the current draft.',
+            resultType: 'failure' as const,
+            error: 'critique_disabled',
+          };
+        }
+        const allow = ctx.consumeCritiquePass(args.slideId);
+        if (!allow.allowed) {
+          return {
+            textResultForLlm: `Critique budget for slide "${args.slideId}" is exhausted (${passes} passes already consumed). Accept the slide as-is and move to the next one. If genuine issues remain, summarise them in chat for the user to weigh in.`,
+            resultType: 'failure' as const,
+            error: 'budget_exhausted',
+          };
+        }
+
+        const plan = ctx.getPlan();
+        if (!plan) {
+          return {
+            textResultForLlm: 'No plan to preview. Call propose_outline first.',
+            resultType: 'failure' as const,
+            error: 'no_plan',
+          };
+        }
+
+        if (!(await isPreviewAvailable())) {
+          return {
+            textResultForLlm:
+              'Visual preview is not available — LibreOffice (`soffice`) is not on $PATH. Tell the user and proceed without the visual critique. They can install it on Ubuntu/WSL with: sudo apt install libreoffice poppler-utils',
+            resultType: 'failure' as const,
+            error: 'libreoffice_missing',
+          };
+        }
+
+        try {
+          const pngPath = await renderSlideToPng(plan, args.slideId, {
+            template: ctx.getTemplate() ?? undefined,
+          });
+          const bytes = await readPng(pngPath);
+          const base64 = bytes.toString('base64');
+          const slideIdx = plan.slides.findIndex((s) => s.id === args.slideId);
+          const remaining = allow.remaining;
+          return {
+            textResultForLlm: `Rendered slide ${slideIdx + 1} ("${args.slideId}") to a PNG (attached). ${remaining} critique pass${remaining === 1 ? '' : 'es'} remaining for this slide. Look at the image; if it's not as good as the references, call revise_slide.`,
+            binaryResultsForLlm: [
+              {
+                type: 'image' as const,
+                mimeType: 'image/png',
+                data: base64,
+                description: `Slide ${slideIdx + 1}: ${args.slideId}`,
+              },
+            ],
+            resultType: 'success' as const,
+          };
+        } catch (e) {
+          if (e instanceof PreviewUnavailableError) {
+            return {
+              textResultForLlm: e.message,
+              resultType: 'failure' as const,
+              error: 'preview_unavailable',
+            };
+          }
+          return {
+            textResultForLlm: `Preview render failed: ${(e as Error).message}`,
+            resultType: 'failure' as const,
+            error: 'render_failed',
           };
         }
       },

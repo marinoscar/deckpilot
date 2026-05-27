@@ -11,6 +11,8 @@ export type SlashCommand =
   | { kind: 'models' }
   | { kind: 'template'; path?: string }
   | { kind: 'load'; path?: string }
+  | { kind: 'critique'; slideId?: string }
+  | { kind: 'critique-passes'; n?: number }
   | { kind: 'quit' }
   | { kind: 'unknown'; raw: string };
 
@@ -30,6 +32,8 @@ const KNOWN: Record<string, SlashCommand['kind']> = {
   models: 'models',
   template: 'template',
   load: 'load',
+  critique: 'critique',
+  'critique-passes': 'critique-passes',
   quit: 'quit',
   exit: 'quit',
 };
@@ -56,6 +60,14 @@ export function parseSlash(input: string): SlashParseResult {
   if (kind === 'load') {
     return { kind: 'load', path: tail.join(' ') || undefined };
   }
+  if (kind === 'critique') {
+    return { kind: 'critique', slideId: tail.join(' ').trim() || undefined };
+  }
+  if (kind === 'critique-passes') {
+    const raw = tail.join(' ').trim();
+    const parsed = raw ? Number.parseInt(raw, 10) : undefined;
+    return { kind: 'critique-passes', n: Number.isNaN(parsed) ? undefined : parsed };
+  }
   return { kind } as SlashCommand;
 }
 
@@ -69,6 +81,8 @@ Slash commands:
   /load <path>      Load a previously-saved .plan.json as the working plan
   /template <path>  Inherit theme + fonts from an existing .pptx (style only)
   /template         Show the currently-loaded template
+  /critique <id>    Force the LLM to re-preview a specific slide (resets its budget)
+  /critique-passes <n>  Set how many preview passes per slide (0 disables, max 5)
   /undo             Roll back the most recent plan change
   /clear            Clear the transcript (keep the deck)
   /new              Reset everything (transcript and deck)

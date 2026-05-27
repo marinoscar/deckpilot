@@ -222,6 +222,30 @@ export const App: React.FC<Props> = ({ session }) => {
         }
         return;
       }
+      case 'critique': {
+        if (!slash.slideId) {
+          session.addSystemMessage(
+            `Critique passes per slide: ${session.getCritiquePasses()}. Usage: /critique <slide-id> to force a fresh preview pass on a specific slide.`,
+          );
+          return;
+        }
+        // Reset usage for this slide so the LLM gets one more pass even if it
+        // had already exhausted the budget on it.
+        session.resetCritiqueUsage(slash.slideId);
+        session.addSystemMessage(
+          `Critique budget reset for "${slash.slideId}". Ask the agent to re-preview it (e.g. "preview slide ${slash.slideId} and refine if needed").`,
+        );
+        return;
+      }
+      case 'critique-passes': {
+        if (typeof slash.n !== 'number') {
+          session.addSystemMessage(`Critique passes per slide: ${session.getCritiquePasses()} (max 5).`);
+          return;
+        }
+        const next = session.setCritiquePasses(slash.n);
+        session.addSystemMessage(`Critique passes per slide set to ${next}.`);
+        return;
+      }
       case 'quit':
         await session.stop();
         exit();
