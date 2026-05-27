@@ -25,17 +25,14 @@ set -euo pipefail
 
 # Bumped on every release of the installer. Printed at the top of every run so
 # users can confirm what they're actually executing (CDN cache misses are real).
-INSTALL_SCRIPT_VERSION="0.1.2"
+INSTALL_SCRIPT_VERSION="0.1.3"
 
-# CRITICAL: detach stdin from whatever invoked us before running any child
-# process. Under `curl ... | bash`, bash's stdin is the script body in the
-# pipe. Child processes inherit that stdin; if even one of them (npm,
-# npx, git, …) reads a byte, those bytes are stolen from the in-flight
-# script and bash will silently EOF and exit mid-way. Symptom: the script
-# stops right after the last npm step ("Manifest ready") with no error.
-# We never need stdin from the caller — interactive prompts below are
-# already guarded by `[ -t 0 ]` and will skip cleanly.
-exec </dev/null
+# NOTE: do NOT redirect bash's own stdin here. Under `curl ... | bash`, bash IS
+# reading the script from stdin. Redirecting stdin at the top would make bash
+# EOF on its next read and exit, dropping curl's outbound writes (curl error 23
+# "Failure writing output to destination"). Stdin isolation for child processes
+# is done at the bottom of the script by wrapping the main flow in a subshell
+# with `</dev/null` — see "# ---------- main ----------".
 
 MODE="user"
 SKIP_BUILD=0
@@ -285,27 +282,37 @@ smoke() {
 # other output so a stale CDN cache is obvious at a glance.
 printf '%sDeckPilot installer%s v%s\n' "$B" "$X" "$INSTALL_SCRIPT_VERSION"
 
-if [ "$ACTION" = "uninstall" ]; then
-  do_uninstall
-fi
+# Run the entire main flow inside a subshell whose stdin is /dev/null. Under
+# `curl ... | bash`, bash itself is reading the script body from stdin (the
+# curl pipe). Children of bash inherit that stdin; if any child (npm, npx,
+# git, …) reads from it, those bytes are stolen from the script bash is still
+# trying to read and bash EOFs and exits silently. Wrapping the work in
+# `( … ) </dev/null` gives every child a closed stdin without touching bash's
+# own script-reading stdin. Functions and arguments are inherited; we don't
+# need to mutate the parent shell's state from here.
+(
+  if [ "$ACTION" = "uninstall" ]; then
+    do_uninstall
+  fi
 
-preflight
-bootstrap
-build
+  preflight
+  bootstrap
+  build
 
-case "$MODE" in
-  user)   link_user ;;
-  system) link_system ;;
-esac
+  case "$MODE" in
+    user)   link_user ;;
+    system) link_system ;;
+  esac
 
-smoke
+  smoke
 
-say ""
-say "${B}DeckPilot is ready.${X}"
-[ "$BOOTSTRAP" -eq 1 ] && say "  Source checkout: ${B}$REPO_DIR${X}"
-say "  Try: ${B}deckpilot doctor${X}     # preflight diagnostics"
-say "       ${B}deckpilot auth login${X} # if you haven't authenticated Copilot CLI yet"
-say "       ${B}deckpilot${X}            # enter the chat loop"
-say ""
-say "${D}To uninstall: curl -fsSL $REPO_URL/raw/$REF/install.sh | bash -s -- --uninstall${X}"
-say "${D}    or from the cloned repo: ./install.sh --uninstall${X}"
+  say ""
+  say "${B}DeckPilot is ready.${X}"
+  [ "$BOOTSTRAP" -eq 1 ] && say "  Source checkout: ${B}$REPO_DIR${X}"
+  say "  Try: ${B}deckpilot doctor${X}     # preflight diagnostics"
+  say "       ${B}deckpilot auth login${X} # if you haven't authenticated Copilot CLI yet"
+  say "       ${B}deckpilot${X}            # enter the chat loop"
+  say ""
+  say "${D}To uninstall: curl -fsSL $REPO_URL/raw/$REF/install.sh | bash -s -- --uninstall${X}"
+  say "${D}    or from the cloned repo: ./install.sh --uninstall${X}"
+) </dev/null
