@@ -308,14 +308,13 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
 
     defineTool('render_slide_preview', {
       description: [
-        'Render the current state of one slide to a PNG image attached to the tool',
-        'result so YOU can see how it actually looks. Call this after each',
-        'propose_outline or revise_slide where you want to verify the visual.',
-        'Evaluate: type hierarchy clear? grid columns balanced? colour story',
-        'cohesive? CTA pills consistent across siblings? Is the slide AS GOOD AS',
-        'the references the user shared? If not, call revise_slide and re-preview.',
-        'There is a hard budget of N preview calls per slide (default 1, configurable',
-        'via --critique-passes). When you exhaust it, accept the slide and move on.',
+        'Render the current state of one slide to a PNG image attached to the tool result so YOU can see how it actually looks.',
+        'REQUIRED in Phase 2 (BUILD): preview every visually-substantive slide (grid / steps / callout / quote) at least once.',
+        'On the FIRST preview of any slide, you MUST find at least one specific improvement — assume the first draft is never perfect. Be critical, not approving.',
+        'Check: type hierarchy, column balance, text overflow, breathing room, dominant-vs-supporting colour, CTA pill consistency, comparable to a Claude.ai reference deck.',
+        'If anything is off, call revise_slide and re-preview. If the slide is genuinely good after revision, move on.',
+        'Hard cap: 5 passes per slide (default 3, configurable via --critique-passes). The text result tells you remaining count.',
+        'Use this tool again in Phase 3 (FINAL REVIEW) to check cross-slide consistency once every slide is built.',
       ].join(' '),
       parameters: z.object({
         slideId: z

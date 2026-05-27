@@ -31,9 +31,9 @@ export default class Chat extends BaseCommand {
     }),
     'critique-passes': Flags.integer({
       description:
-        'How many render_slide_preview passes the model is allowed per slide (0 disables the visual critique loop). Default 1, max 5.',
+        'How many render_slide_preview passes the model is allowed per slide (0 disables the visual critique loop). Default 3, max 5.',
       required: false,
-      default: 1,
+      default: 3,
       min: 0,
       max: 5,
     }),

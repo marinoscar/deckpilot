@@ -4,7 +4,7 @@
 
 Have a normal conversation in your terminal — DeckPilot drafts the outline, lets you revise it slide-by-slide, then renders a real `.pptx` you can hand off. Same terminal UX feel as Claude Code or GitHub Copilot CLI, with `pptxgenjs` as the renderer.
 
-> **Status:** v0.7 — visual quality overhaul complete. Card-based composition (v0.5), agentic critique loop (v0.6), and now five bundled style presets + `DECKPILOT.md` style-guide ingestion + an expanded glyph library (v0.7). `deckpilot` chats from a directory with a `DECKPILOT.md` produce decks that honour your standing style rules; otherwise the agent picks a preset (`editorial` / `minimal-executive` / `energetic-startup` / `corporate-blue` / `studious-academic`) and runs with it.
+> **Status:** v0.8 — workflow tightened. The agent now follows a strict three-phase loop: PLAN (propose a readable per-slide outline → wait for user approval) → BUILD (preview every visually-substantive slide and self-critique honestly) → FINAL REVIEW (deck-wide consistency pass). Each slide gets up to 5 critique iterations (default 3) so the loop actually runs instead of declaring the first draft "good".
 
 ---
 
@@ -74,7 +74,7 @@ nvm install 22
 ## First run
 
 ```bash
-deckpilot doctor       # preflight: Node, token, cwd writable, Copilot SDK reachable
+deckpilot doctor       # preflight: Node, token, cwd writable, Copilot SDK reachable, LibreOffice pipeline
 deckpilot auth login   # if doctor reports no token (uses the Copilot CLI device flow)
 deckpilot              # enter the chat loop
 ```
@@ -139,36 +139,79 @@ To pick up where you left off later:
 
 ## How it works
 
-DeckPilot follows the **outline-first** pattern: the LLM never writes rendering code, it produces a structured `SlidePlan` via tool calls, and a deterministic renderer turns that plan into a `.pptx`. This is what keeps output consistent across runs.
+DeckPilot follows an **outline-first, composition-driven** pattern. The LLM never writes rendering code — it commits to one deck-wide `DesignSystem`, then describes each slide as a *composition* (cards, columns, callouts, etc.), and a deterministic primitive-based renderer turns that into a `.pptx`. Optionally, the agent rasterises slides to PNG so it can see its own work and revise.
 
 ```
-your chat ─► Copilot SDK ──► propose_outline / revise_slide  ──► SlidePlan (zod-validated)
-                                                                      │
-                                                       (optional)     ▼
-                                                       template ─►  pptxgenjs renderer
-                                                                      │
-                                                                      ▼
-                                                                  deck.pptx
+your chat ─► Copilot SDK
+                │
+                ├─► apply_design_preset / set_design_system   ── one DesignSystem per deck
+                │
+                ├─► propose_outline / revise_slide            ── slides composed as
+                │                                                 prose | grid | steps |
+                │                                                 callout | quote
+                │                                                       │
+                │   render_slide_preview (LibreOffice ─► PNG)           ▼
+                │   ◄───────── image attached to next turn      pptxgenjs primitive
+                │             agent sees + critiques            renderer
+                │                                                       │
+                └─► render_deck / save_deck ──────────────────►   deck.pptx
+                                                                  (+ optional .plan.json)
 ```
 
-The LLM does *content* and *layout selection*. The renderer does *visual execution*. Constraints baked into the schema (max 6 bullets per slide, max 2 nesting levels, capped title length) are how DeckPilot enforces visual restraint — the model can't generate cluttered slides because the schema rejects them.
+The LLM does *content + composition choices + style judgement*. The renderer does *visual execution* — cards, kickers, footer bands, numbered badges, CTA pills, glyphs — drawn from a fixed primitive library so output is consistent across runs. Constraints baked into the schema (max 6 bullets per slide, max 4 columns in a grid, capped title length) enforce restraint.
 
 ### What the renderer produces
 
-Six slide layouts with deliberate visual design:
+Slides aren't picked from a fixed layout menu — each one is *composed*. The agent chooses one of five composition kinds per slide:
 
-| Layout | When | What it renders |
+| Composition | When | What it renders |
 |---|---|---|
-| **title** | Opening slide | Big bold title, optional subtitle in muted grey, accent-coloured strip above, author/date pinned to the bottom |
-| **content** | Most body slides | Thin accent bar at the top-left, title in accent colour, 3–6 bullets in accent/muted hierarchy, footer with page count |
-| **two-col** | Side-by-side comparison | Title above two columns with optional headings, muted vertical divider between them |
-| **section** | Chapter divider | Full-bleed accent background, large white title (and optional "01" number for visual rhythm), no footer |
-| **quote** | Pull quote | Oversized accent `"` glyph as graphic cue, italic quote text, attribution in muted footer position |
-| **closing** | Thanks / contact | Centered title on accent background, optional subtitle and contact line |
+| **prose** | Ordinary narrative slides | Kicker + title + lead paragraph + up to 6 bullets in accent/muted hierarchy |
+| **grid** | The powerhouse — comparisons, progressions, KPI grids | 2/3/4 cards in a row, each with optional kicker, number badge, glyph (table / network / equals / check / cross / spark / bars / pie / grid / cursor), title, body or bullets, accent CTA pill |
+| **steps** | Process flows | Horizontal row of numbered badges + titles + descriptions, connected by a thin dashed line |
+| **callout** | The chapter takeaway | One oversized statement, optionally with a small "Bottom line:"-style lead |
+| **quote** | Pull quote | Oversized accent `"` glyph, italic body, attribution underneath |
 
-All slides get speaker notes (the model is required to populate them). Footers (small, muted "page x of y" + dim deck title) appear on content and two-col slides only — title, section, and closing get breathing room.
+Every slide also has an optional **kicker** (small all-caps signpost above the title), **title** + **subtitle**, optional **footer band** (deck title · section · page x/y), and is required to carry **speaker notes**. Decorative habits — kickers, footer band, corner accents, card style (side-bar / top-bar / plain), numbered badge style (circle / pill) — are governed by the DesignSystem so the deck feels consistent end-to-end.
 
-**Theme:** defaults to a clean Inter / Inter Tight pair with an IBM Carbon-derived blue (`#0F62FE`). Override per deck via `/template @brand.pptx` (full inheritance from a corporate `.pptx`) or let the LLM set theme colours directly in `propose_outline`.
+### Controlling style — three knobs
+
+The agent picks a DesignSystem for every deck. You have three ways to steer it, in order of precedence (later wins):
+
+1. **Bundled presets.** The agent prefers one of five named DesignSystems when your prompt fits: `editorial` (navy + red, mirrors the reference designs), `minimal-executive` (charcoal + amber, no chrome), `energetic-startup` (magenta + cyan, top-bar cards), `corporate-blue` (IBM Carbon blue), `studious-academic` (deep green + amber, serif headings). Say "editorial style" or "startup launch deck" in your prompt and the agent reaches for the closest preset. `/presets` lists them.
+
+2. **`--template @brand.pptx`** (or `/template @brand.pptx` mid-session). Parses an existing `.pptx`'s theme — accent colours, accent-dark, ink, muted, paper, heading + body fonts, aspect ratio — and folds them on top of whatever preset the agent chose. The template's slides are NOT imported, only its style.
+
+3. **`DECKPILOT.md`** in cwd (or any ancestor). A persistent markdown file with standing rules. DeckPilot walks up the directory tree like `git` and loads the first match (capped at 12 KB). The rules are injected into the system prompt as a binding style guide. `/style-guide` confirms the active one.
+
+   ```markdown
+   # DeckPilot style guide
+
+   - Always use the `corporate-blue` preset
+   - Brand accent: #0F62FE (override accent if needed)
+   - Never use serif fonts
+   - Footer band: on
+   - Slide titles never exceed 6 words
+   ```
+
+### Workflow (since v0.8)
+
+The agent runs a three-phase loop every time you ask for a deck:
+
+1. **PLAN.** It picks a design system, calls `propose_outline`, then **shows the outline back to you in readable prose** — slide-by-slide with title, subtitle, and a one-line content description. It will not start drawing until you say "build" (or "go", "proceed", "looks good"). Iterate freely; the agent re-presents the updated outline after every change.
+2. **BUILD.** For each slide, it calls `render_slide_preview`, looks at the rendered PNG, finds at least one specific improvement on the first preview (assume drafts are never perfect), revises, and moves on once the slide is genuinely good. Per-slide budget: up to 5 critique iterations.
+3. **FINAL REVIEW.** Once every slide is built, the agent re-previews the whole deck for cross-slide consistency — alt-accent balance, kicker tone, opener vs closer weight — and makes final tweaks before writing the `.pptx`.
+
+The critique loop depends on `LibreOffice + poppler-utils` being installed. When they're missing, the loop disables itself silently and the agent still writes a deck — it just can't see its own work to self-correct.
+
+```bash
+deckpilot chat --critique-passes 5     # max — let the agent grind harder on each slide
+deckpilot chat --critique-passes 0     # disable the critique loop entirely
+/critique <slide-id>                    # mid-session: reset a specific slide's budget
+/critique-passes 4                      # mid-session: change the ceiling
+```
+
+Default is 3 per slide; cap is 5.
 
 ---
 
@@ -176,7 +219,7 @@ All slides get speaker notes (the model is required to populate them). Footers (
 
 ```
 deckpilot              # enter the chat (alias for `deckpilot chat`)
-deckpilot chat         # explicit form: --model, --token, --template flags
+deckpilot chat         # explicit form: --model, --token, --template, --critique-passes
 deckpilot version      # print version + platform info
 deckpilot --version    # short form
 deckpilot doctor       # preflight diagnostics
@@ -216,24 +259,6 @@ This unlinks the global binary and removes the bootstrap clone (if any). It does
 - ✅ **v0.6 — visual overhaul phase 2** — Agentic critique loop. The LLM renders each slide to a PNG via LibreOffice (`render_slide_preview` tool), sees its own work, and revises if it's not good enough. `--critique-passes` flag + `/critique` / `/critique-passes` slash commands.
 - ✅ **v0.7 (current) — visual overhaul phase 3** — Five bundled `DesignSystem` presets (editorial, minimal-executive, energetic-startup, corporate-blue, studious-academic), `apply_design_preset` tool, `DECKPILOT.md` project style-guide ingestion, four new glyphs (bars, pie, grid, cursor), `/presets` and `/style-guide` slash commands.
 - 🔜 **M5** — Hardening, telemetry opt-in, cross-platform smoke tests, npm publish.
-
-### DECKPILOT.md — persistent style guidance
-
-Drop a `DECKPILOT.md` file in your working directory (or any ancestor — DeckPilot walks up like git). Anything you write in it becomes a binding style guide the agent honours on every chat from that directory. Plain markdown, no frontmatter.
-
-```markdown
-# DeckPilot style guide
-
-- Always use the `corporate-blue` preset
-- Brand accent: #0F62FE (override accent if needed)
-- Never use serif fonts
-- Footer band: on
-- Slide titles never exceed 6 words
-```
-
-Run `/style-guide` mid-session to confirm the active guide; the agent surfaces a load notice on startup too.
-
----
 
 ## License
 

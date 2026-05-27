@@ -74,7 +74,7 @@ export class ChatSession {
   private designSystem: DesignSystem | null = null;
 
   /** Per-slide critique pass budget. Clamped to [0, MAX_CRITIQUE_PASSES]. */
-  private critiquePasses = 1;
+  private critiquePasses = 3;
   /** Per-slide count of preview-render calls already consumed. */
   private critiqueUsage = new Map<string, number>();
 
