@@ -1,9 +1,12 @@
 import type { CopilotSession, ModelInfo } from '@github/copilot-sdk';
 import type { DeckPilotClient } from '../copilot/client.js';
 import { UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
-import { buildToolRegistry } from '../copilot/tools.js';
-import { M1_SYSTEM_PROMPT } from './system-prompt.js';
+import { buildDeckTools, type DeckToolContext } from '../tools/index.js';
+import { SYSTEM_PROMPT } from './system-prompt.js';
+import { applySlidePatch } from '../deck/revise.js';
+import type { Slide, SlidePatch, SlidePlan } from '../deck/schema.js';
 import { log } from '../util/logger.js';
+import { resolve } from 'node:path';
 
 export type TranscriptEntry =
   | { kind: 'user'; id: string; text: string }
@@ -14,10 +17,14 @@ export type TranscriptEntry =
 export type SessionListener = (entries: TranscriptEntry[]) => void;
 export type ModelListener = (model: string) => void;
 export type BusyListener = (busy: boolean) => void;
+export type PlanListener = (plan: SlidePlan | null) => void;
 
 export type ChatSessionOptions = {
   model?: string;
 };
+
+/** Maximum SlidePlan revisions we keep around for `/undo`. */
+const UNDO_DEPTH = 20;
 
 export class ChatSession {
   private transcript: TranscriptEntry[] = [];
@@ -32,6 +39,12 @@ export class ChatSession {
   private requestedModel: string | undefined;
   /** Model the SDK has actually reported as active. Empty until the first session.model_change event arrives. */
   private activeModel: string | null = null;
+
+  /** Working SlidePlan. Mutated by tools and slash commands. */
+  private plan: SlidePlan | null = null;
+  /** Stack of prior plan snapshots for `/undo`. Each propose_outline / revise_slide pushes the previous plan. */
+  private planHistory: (SlidePlan | null)[] = [];
+  private planListeners = new Set<PlanListener>();
 
   constructor(
     private readonly dp: DeckPilotClient,
@@ -75,11 +88,73 @@ export class ChatSession {
     return this.dp.listModels();
   }
 
+  // ---- deck state ----
+
+  getPlan(): SlidePlan | null {
+    return this.plan;
+  }
+
+  onPlanChange(fn: PlanListener): () => void {
+    this.planListeners.add(fn);
+    fn(this.plan);
+    return () => {
+      this.planListeners.delete(fn);
+    };
+  }
+
+  setPlan(plan: SlidePlan): void {
+    this.planHistory.push(this.plan);
+    if (this.planHistory.length > UNDO_DEPTH) this.planHistory.shift();
+    this.plan = plan;
+    for (const fn of this.planListeners) fn(plan);
+  }
+
+  patchSlide(slideId: string, patch: SlidePatch): Slide {
+    if (!this.plan) throw new Error('No working plan to patch.');
+    const { plan, slide } = applySlidePatch(this.plan, slideId, patch);
+    this.planHistory.push(this.plan);
+    if (this.planHistory.length > UNDO_DEPTH) this.planHistory.shift();
+    this.plan = plan;
+    for (const fn of this.planListeners) fn(plan);
+    return slide;
+  }
+
+  /** Roll back one revision. Returns true if anything was undone. */
+  undo(): boolean {
+    if (this.planHistory.length === 0) return false;
+    const prev = this.planHistory.pop()!;
+    this.plan = prev;
+    for (const fn of this.planListeners) fn(prev);
+    return true;
+  }
+
+  defaultOutputPath(): string {
+    const title = this.plan?.meta.title ?? 'deckpilot-output';
+    const slug =
+      title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'deckpilot-output';
+    return resolve(process.cwd(), `${slug}.pptx`);
+  }
+
+  private toolContext(): DeckToolContext {
+    return {
+      getPlan: () => this.plan,
+      setPlan: (p) => this.setPlan(p),
+      patchSlide: (id, patch) => this.patchSlide(id, patch),
+      defaultOutputPath: () => this.defaultOutputPath(),
+    };
+  }
+
+  // ---- lifecycle ----
+
   async start(): Promise<void> {
     await this.dp.start();
     this.session = await this.dp.createSession({
-      systemPrompt: M1_SYSTEM_PROMPT,
-      tools: buildToolRegistry(),
+      systemPrompt: SYSTEM_PROMPT,
+      tools: buildDeckTools(this.toolContext()),
       streaming: true,
       model: this.requestedModel,
     });

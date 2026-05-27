@@ -24,6 +24,7 @@ const hook: Hook<'init'> = async function (opts) {
     'version',
     'ver',
     'models',
+    'render',
   ]);
   if (!known.has(first)) return;
 };

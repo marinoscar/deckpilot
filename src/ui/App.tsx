@@ -6,7 +6,10 @@ import { Transcript } from './Transcript.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
-import { renderSampleDeck } from '../render/renderer.js';
+import { renderPlan } from '../render/renderer.js';
+import { summarizePlan } from '../deck/revise.js';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 
 type Status = 'idle' | 'streaming' | 'cancelled' | 'error';
 
@@ -83,19 +86,76 @@ export const App: React.FC<Props> = ({ session }) => {
         session.addSystemMessage(HELP_TEXT);
         return;
       case 'clear':
+        session.clear();
+        session.addSystemMessage('Transcript cleared. (Deck plan preserved — use /new to also reset the deck.)');
+        return;
       case 'new':
         session.clear();
-        session.addSystemMessage('Transcript cleared.');
+        // Force a fresh plan slot by setting plan via setPlan is wrong (it
+        // requires a SlidePlan). For a true reset we just clear history;
+        // the next propose_outline replaces everything anyway.
+        session.addSystemMessage('Transcript cleared. Next propose_outline will replace the current deck.');
         return;
       case 'render': {
-        const path = slash.outputPath ?? 'deckpilot-sample.pptx';
-        session.addSystemMessage(`Rendering hardcoded M1 sample deck → ${path} …`);
+        const plan = session.getPlan();
+        if (!plan) {
+          session.addSystemMessage(
+            'No deck plan yet. Ask the agent first (e.g. "make me a 6-slide intro to vector databases for a CTO audience").',
+          );
+          return;
+        }
+        const out = slash.outputPath ?? session.defaultOutputPath();
+        session.addSystemMessage(`Rendering ${plan.slides.length}-slide deck → ${out} …`);
         try {
-          const out = await renderSampleDeck(path);
-          session.addSystemMessage(`Wrote ${out}`);
+          const abs = await renderPlan(plan, out);
+          session.addSystemMessage(`Wrote ${abs}`);
         } catch (e) {
           session.addSystemMessage(`render failed: ${(e as Error).message}`);
         }
+        return;
+      }
+      case 'save': {
+        const plan = session.getPlan();
+        if (!plan) {
+          session.addSystemMessage('No deck plan yet. Use /render only after the agent has proposed one.');
+          return;
+        }
+        const out = slash.outputPath ?? session.defaultOutputPath();
+        session.addSystemMessage(`Saving deck + plan.json → ${out} …`);
+        try {
+          const abs = await renderPlan(plan, out);
+          const jsonPath = resolve(dirname(abs), `${abs.replace(/\.pptx$/i, '')}.plan.json`);
+          await mkdir(dirname(jsonPath), { recursive: true });
+          await writeFile(jsonPath, JSON.stringify(plan, null, 2));
+          session.addSystemMessage(`Wrote ${abs}\n     and ${jsonPath}`);
+        } catch (e) {
+          session.addSystemMessage(`save failed: ${(e as Error).message}`);
+        }
+        return;
+      }
+      case 'outline': {
+        const plan = session.getPlan();
+        if (!plan) {
+          session.addSystemMessage('No deck plan yet.');
+          return;
+        }
+        session.addSystemMessage(summarizePlan(plan));
+        return;
+      }
+      case 'show': {
+        const plan = session.getPlan();
+        if (!plan) {
+          session.addSystemMessage('No deck plan yet.');
+          return;
+        }
+        session.addSystemMessage(JSON.stringify(plan, null, 2));
+        return;
+      }
+      case 'undo': {
+        const undone = session.undo();
+        session.addSystemMessage(
+          undone ? 'Reverted the last plan change.' : 'Nothing to undo.',
+        );
         return;
       }
       case 'model': {

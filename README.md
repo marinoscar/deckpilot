@@ -4,7 +4,7 @@
 
 Have a normal conversation in your terminal — DeckPilot drafts the outline, lets you revise it slide-by-slide, then renders a real `.pptx` you can hand off. Same terminal UX feel as Claude Code or GitHub Copilot CLI, with `pptxgenjs` as the renderer.
 
-> **Status:** M1 — the spine works end-to-end. Hardcoded sample deck via `/render`. Outline-first generation, templates, and charts land in M2–M4. See [the build plan](./CLAUDE.md) for the roadmap.
+> **Status:** M2 — outline-first generation works end-to-end. The agent authors a validated `SlidePlan`, you iterate slide-by-slide, and the renderer emits a `.pptx` with proper type hierarchy, accent strips, section dividers, two-column comparisons, pull-quote layouts, footers, and speaker notes. Templates (M3) and charts (M4) are next on the roadmap.
 
 ---
 
@@ -93,11 +93,29 @@ You drop into an Ink-rendered chat with the Copilot SDK as the brain. Anything y
 | Slash command | What it does |
 |---|---|
 | `/help`, `/?` | List slash commands |
-| `/clear`, `/new` | Reset the transcript |
-| `/render [path]` | Render the M1 sample 3-slide deck (defaults to `./deckpilot-sample.pptx`) |
+| `/outline` | Compact outline of the current deck (titles + bullet counts) |
+| `/show` | Print the full plan as JSON |
+| `/render [path]` | Render the current plan to `.pptx` (default: `./<title>.pptx`) |
+| `/save [path]` | Render + also save a `.plan.json` next to the deck for re-editing |
+| `/undo` | Roll back the most recent plan change |
+| `/clear` | Reset the transcript (keep the deck plan) |
+| `/new` | Reset everything |
+| `/model`, `/models` | Inspect or switch the active model |
 | `/quit`, `/exit` | Exit |
 
 **Cancelling:** **Ctrl+C** while a response is streaming aborts the generation but keeps the session alive. A second **Ctrl+C** within ~1s exits DeckPilot. (Same convention as Claude Code.)
+
+### Example session
+
+```
+› make me a 7-slide intro to vector databases for a CTO audience
+  · the agent calls propose_outline; you see "Outline accepted (7 slides)"
+› revise slide s3 to add a bullet about hybrid search
+  · the agent calls revise_slide; the change is applied to the plan
+› /outline
+  · prints the deck at a glance — titles + bullet counts
+› /save                     # renders to ./vector-databases.pptx + .plan.json
+```
 
 ---
 
@@ -112,6 +130,8 @@ deckpilot doctor       # preflight diagnostics
 deckpilot auth status  # show current Copilot auth state
 deckpilot auth login   # device-flow login (via the bundled Copilot CLI)
 deckpilot auth logout
+deckpilot models       # list models the Copilot SDK exposes
+deckpilot render <plan.json> [--out <pptx>]  # non-interactive render (CI, scripting)
 deckpilot help [cmd]   # detailed per-command help
 deckpilot autocomplete # set up shell completions
 ```
