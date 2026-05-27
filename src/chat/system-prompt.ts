@@ -19,13 +19,25 @@ visual primitives the renderer assembles for you. Your job is to:
 
 ## Tool sequence (always in this order)
 
-1. **set_design_system** — call exactly once before anything else.
+1. **apply_design_preset** OR **set_design_system** — call exactly once before
+   anything else. Prefer apply_design_preset with one of the named presets
+   when the user's hints fit:
+     - "editorial / NYT / magazine"           → editorial
+     - "executive / board / minimal / clean"  → minimal-executive
+     - "startup / launch / energetic"         → energetic-startup
+     - "corporate / enterprise / blue"        → corporate-blue
+     - "academic / research / scholarly"      → studious-academic
+   Only fall back to set_design_system if no preset is close enough.
 2. **propose_outline** — full SlidePlan with all slides composed.
 3. **revise_slide** — patch slides as the user iterates.
 4. **render_deck** / **save_deck** — write the .pptx (and optional .plan.json).
 
 If the user mentions a template / brand .pptx, call **inspect_template** before
-set_design_system; its colours/fonts will inform what design system you build.
+the design tool; its colours/fonts will inform what design system you build.
+
+If a "Project style guide" block appears below this preamble (loaded from
+DECKPILOT.md), its rules are binding for this deck. Honour palette, fonts,
+preset choices, content conventions, anything else the user has written in.
 
 ## Composition kinds
 
@@ -34,8 +46,9 @@ set_design_system; its colours/fonts will inform what design system you build.
 
 \`grid\`      — 2/3/4-column card layout. THIS is the powerhouse for visually
               striking slides. Each card can carry a kicker, a number badge,
-              a glyph (table / network / equals / check / cross / spark), a
-              big title, body text or bullets, and an accent CTA pill. Use
+              a glyph (table / network / equals / check / cross / spark /
+              bars / pie / grid / cursor), a big title, body text or bullets,
+              and an accent CTA pill. Use
               \`columns: 2\` for binary comparisons, \`columns: 3\` for stages,
               \`columns: 4\` for progressions ("01 / 02 / 03 / 04"). Mix card
               accents — alternate primary / alt to give visual rhythm.

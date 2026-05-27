@@ -12,6 +12,7 @@ import {
   type Slide,
   type SlidePlan,
 } from '../deck/schema.js';
+import { PRESETS, PRESET_NAMES, describePreset, type PresetName } from '../deck/presets.js';
 import { applySlidePatch, summarizePlan, summarizeSlide } from '../deck/revise.js';
 import { renderPlan } from '../render/renderer.js';
 import { PreviewUnavailableError, isPreviewAvailable, readPng, renderSlideToPng } from '../render/preview.js';
@@ -78,14 +79,47 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
   // generic is invariant). Cast each tool to `Tool` (= Tool<unknown>) at the
   // boundary.
   const tools: Tool[] = [
+    defineTool('apply_design_preset', {
+      description: [
+        'Quickest way to lock in a design system: pick one of the named presets and (optionally) override a few fields. Prefer this over set_design_system for ordinary decks.',
+        'Available presets:',
+        ...PRESET_NAMES.map((n) => `  - ${describePreset(n)}`),
+        'The overrides field accepts any subset of DesignSystem fields and is merged on top of the preset. Use overrides sparingly — the presets are tuned.',
+      ].join('\n'),
+      parameters: z.object({
+        preset: z.enum(PRESET_NAMES as [PresetName, ...PresetName[]]).describe('Name of a preset to clone.'),
+        overrides: DesignSystemSchema.partial()
+          .optional()
+          .describe('Optional per-field overrides applied on top of the chosen preset.'),
+      }),
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ summary: string }>> => {
+        const base = PRESETS[args.preset as PresetName];
+        const merged = { ...base, ...(args.overrides ?? {}) };
+        const parsed = DesignSystemSchema.safeParse(merged);
+        if (!parsed.success) {
+          return {
+            ok: false,
+            error: 'Preset + overrides failed validation:\n' + formatZodError(parsed.error),
+          };
+        }
+        ctx.setDesignSystem(parsed.data);
+        const d = parsed.data;
+        return {
+          ok: true,
+          message: `Applied preset "${args.preset}". Now call propose_outline.`,
+          data: {
+            summary: `${args.preset} · accent #${d.accent}, accentAlt #${d.accentAlt}, fonts ${d.fontHeading}/${d.fontBody}, cardStyle=${d.cardStyle}, kickers=${d.useKickers}`,
+          },
+        };
+      },
+    }) as Tool,
+
     defineTool('set_design_system', {
       description: [
-        'Establish the deck-wide visual guideline. Call this EXACTLY ONCE per deck, BEFORE propose_outline.',
-        'Pick a coherent palette (one primary accent + one supporting alt accent), a font pair, a tone',
-        '(editorial / minimal / corporate / energetic / studious), and decorative habits (kickers,',
-        'footer band, card style). All subsequent slides will be composed against this guideline so the',
-        'deck feels designed end-to-end, not assembled. If the user gave you style hints, honour them.',
-        'If they did not, default to tone="editorial", a navy + red palette, kickers on, footer band on.',
+        'Lock in a fully-custom design system. Prefer apply_design_preset when one of the five presets is close enough — this tool is for genuinely bespoke palettes / tones the presets don\'t cover.',
+        'Sets ONCE per deck, BEFORE propose_outline. All slides are composed against this guideline.',
+        'If the user gave no style hints, prefer apply_design_preset("editorial") instead of inventing.',
       ].join(' '),
       parameters: DesignSystemSchema,
       skipPermission: true,

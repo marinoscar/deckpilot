@@ -13,6 +13,8 @@ export type SlashCommand =
   | { kind: 'load'; path?: string }
   | { kind: 'critique'; slideId?: string }
   | { kind: 'critique-passes'; n?: number }
+  | { kind: 'style-guide' }
+  | { kind: 'presets' }
   | { kind: 'quit' }
   | { kind: 'unknown'; raw: string };
 
@@ -34,6 +36,8 @@ const KNOWN: Record<string, SlashCommand['kind']> = {
   load: 'load',
   critique: 'critique',
   'critique-passes': 'critique-passes',
+  'style-guide': 'style-guide',
+  presets: 'presets',
   quit: 'quit',
   exit: 'quit',
 };
@@ -83,6 +87,8 @@ Slash commands:
   /template         Show the currently-loaded template
   /critique <id>    Force the LLM to re-preview a specific slide (resets its budget)
   /critique-passes <n>  Set how many preview passes per slide (0 disables, max 5)
+  /presets          List the available named DesignSystem presets
+  /style-guide      Show the active DECKPILOT.md (or note that none was found)
   /undo             Roll back the most recent plan change
   /clear            Clear the transcript (keep the deck)
   /new              Reset everything (transcript and deck)

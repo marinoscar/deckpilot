@@ -9,6 +9,7 @@ import { ThinkingIndicator } from './ThinkingIndicator.js';
 import { renderPlan } from '../render/renderer.js';
 import { summarizePlan } from '../deck/revise.js';
 import { summarizeTemplate } from '../template/profile.js';
+import { listPresets } from '../deck/presets.js';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
@@ -244,6 +245,26 @@ export const App: React.FC<Props> = ({ session }) => {
         }
         const next = session.setCritiquePasses(slash.n);
         session.addSystemMessage(`Critique passes per slide set to ${next}.`);
+        return;
+      }
+      case 'presets': {
+        const lines = listPresets().map((p) => `  • ${p.description}`);
+        session.addSystemMessage(
+          `Named DesignSystem presets (the agent can pick one via apply_design_preset):\n${lines.join('\n')}`,
+        );
+        return;
+      }
+      case 'style-guide': {
+        const guide = session.getStyleGuide();
+        if (!guide) {
+          session.addSystemMessage(
+            'No DECKPILOT.md found in this directory (or any ancestor). Create one to set persistent style/instruction rules for the agent.',
+          );
+          return;
+        }
+        session.addSystemMessage(
+          `Active style guide: ${guide.path} (${guide.bytes} bytes). Its rules are binding for this deck.`,
+        );
         return;
       }
       case 'quit':

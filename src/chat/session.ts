@@ -9,6 +9,7 @@ import { SlidePlanSchema } from '../deck/schema.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { summarizeTemplate } from '../template/profile.js';
 import { inspectTemplate } from '../template/inspect.js';
+import { loadStyleGuide, renderStyleGuideBlock, type ProjectStyleGuide } from '../config/project.js';
 import { log } from '../util/logger.js';
 import { resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -76,6 +77,9 @@ export class ChatSession {
   private critiquePasses = 1;
   /** Per-slide count of preview-render calls already consumed. */
   private critiqueUsage = new Map<string, number>();
+
+  /** Project-level style guide loaded from DECKPILOT.md, if any. */
+  private styleGuide: ProjectStyleGuide | null = null;
 
   constructor(
     private readonly dp: DeckPilotClient,
@@ -262,6 +266,17 @@ export class ChatSession {
     this.critiqueUsage.delete(slideId);
   }
 
+  // ---- project style guide ----
+
+  getStyleGuide(): ProjectStyleGuide | null {
+    return this.styleGuide;
+  }
+
+  async reloadStyleGuide(startDir?: string): Promise<ProjectStyleGuide | null> {
+    this.styleGuide = await loadStyleGuide(startDir);
+    return this.styleGuide;
+  }
+
   private toolContext(): DeckToolContext {
     return {
       getPlan: () => this.plan,
@@ -281,13 +296,31 @@ export class ChatSession {
 
   async start(): Promise<void> {
     await this.dp.start();
+    // Load DECKPILOT.md from cwd/ancestors before opening the session so its
+    // rules can be folded into the system prompt as a binding style guide.
+    try {
+      this.styleGuide = await loadStyleGuide();
+    } catch (e) {
+      log.warn('DECKPILOT.md load failed:', (e as Error).message);
+      this.styleGuide = null;
+    }
+    const systemPrompt = this.styleGuide
+      ? `${SYSTEM_PROMPT}\n\n${renderStyleGuideBlock(this.styleGuide)}`
+      : SYSTEM_PROMPT;
+
     this.session = await this.dp.createSession({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt,
       tools: buildDeckTools(this.toolContext()),
       streaming: true,
       model: this.requestedModel,
     });
     this.attachEvents(this.session);
+
+    if (this.styleGuide) {
+      this.addSystemMessage(
+        `Loaded project style guide from ${this.styleGuide.path} (${this.styleGuide.bytes} bytes). Its rules are binding for this deck.`,
+      );
+    }
     if (this.requestedTemplatePath) {
       try {
         const profile = await this.loadTemplate(this.requestedTemplatePath);

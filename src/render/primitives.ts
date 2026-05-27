@@ -473,6 +473,18 @@ export function drawGlyph(slide: Slide, kind: Glyph, opts: GlyphOpts): void {
     case 'spark':
       drawSparkGlyph(slide, opts);
       return;
+    case 'bars':
+      drawBarsGlyph(slide, opts);
+      return;
+    case 'pie':
+      drawPieGlyph(slide, opts);
+      return;
+    case 'grid':
+      drawGridGlyph(slide, opts);
+      return;
+    case 'cursor':
+      drawCursorGlyph(slide, opts);
+      return;
   }
 }
 
@@ -621,6 +633,100 @@ function drawSparkGlyph(slide: Slide, o: GlyphOpts): void {
     y: end.y - r,
     w: r * 2,
     h: r * 2,
+    fill: { color: o.accentHex },
+    line: { type: 'none' },
+  });
+}
+
+function drawBarsGlyph(slide: Slide, o: GlyphOpts): void {
+  // 4 ascending bars
+  const heights = [0.35, 0.55, 0.75, 1.0];
+  const barW = (o.w * 0.7) / heights.length;
+  const gap = (o.w * 0.3) / (heights.length + 1);
+  const baseY = o.y + o.h * 0.95;
+  for (let i = 0; i < heights.length; i++) {
+    const h = o.h * 0.8 * heights[i]!;
+    const x = o.x + gap + i * (barW + gap);
+    slide.addShape('rect', {
+      x,
+      y: baseY - h,
+      w: barW,
+      h,
+      fill: { color: i === heights.length - 1 ? o.accentHex : o.mutedHex },
+      line: { type: 'none' },
+    });
+  }
+}
+
+function drawPieGlyph(slide: Slide, o: GlyphOpts): void {
+  // Donut-ish: outer accent ring with a muted inner circle. Approximates a
+  // pie chart without needing custom geometry.
+  const size = Math.min(o.w, o.h) * 0.9;
+  const cx = o.x + o.w / 2 - size / 2;
+  const cy = o.y + o.h / 2 - size / 2;
+  slide.addShape('ellipse', {
+    x: cx,
+    y: cy,
+    w: size,
+    h: size,
+    fill: { color: o.accentHex },
+    line: { type: 'none' },
+  });
+  // Cutout wedge — overlay a smaller arc with paper colour to fake a slice.
+  // pptxgenjs doesn't support real arcs without custom geometry, so we use
+  // an inner muted circle to make it look like a donut.
+  const inner = size * 0.45;
+  slide.addShape('ellipse', {
+    x: cx + (size - inner) / 2,
+    y: cy + (size - inner) / 2,
+    w: inner,
+    h: inner,
+    fill: { color: 'FFFFFF' },
+    line: { type: 'none' },
+  });
+  // A thin radial line for visual rhythm
+  slide.addShape('line', {
+    x: cx + size / 2,
+    y: cy,
+    w: 0,
+    h: size / 2,
+    line: { color: 'FFFFFF', width: 2 },
+  });
+}
+
+function drawGridGlyph(slide: Slide, o: GlyphOpts): void {
+  // 2x2 squares with one accent and three muted
+  const size = Math.min(o.w, o.h);
+  const cellSize = size * 0.42;
+  const gap = size * 0.06;
+  const startX = o.x + (o.w - (cellSize * 2 + gap)) / 2;
+  const startY = o.y + (o.h - (cellSize * 2 + gap)) / 2;
+  const cells: { dx: number; dy: number; accent: boolean }[] = [
+    { dx: 0, dy: 0, accent: true },
+    { dx: cellSize + gap, dy: 0, accent: false },
+    { dx: 0, dy: cellSize + gap, accent: false },
+    { dx: cellSize + gap, dy: cellSize + gap, accent: false },
+  ];
+  for (const c of cells) {
+    slide.addShape('rect', {
+      x: startX + c.dx,
+      y: startY + c.dy,
+      w: cellSize,
+      h: cellSize,
+      fill: { color: c.accent ? o.accentHex : o.mutedHex, transparency: c.accent ? 0 : 60 },
+      line: { type: 'none' },
+    });
+  }
+}
+
+function drawCursorGlyph(slide: Slide, o: GlyphOpts): void {
+  // Right-pointing arrow head — a chevron-y feel. Uses the chevron primitive.
+  const size = Math.min(o.w, o.h);
+  slide.addShape('chevron', {
+    x: o.x + (o.w - size) / 2,
+    y: o.y + (o.h - size * 0.7) / 2,
+    w: size,
+    h: size * 0.7,
     fill: { color: o.accentHex },
     line: { type: 'none' },
   });

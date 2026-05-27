@@ -4,7 +4,7 @@
 
 Have a normal conversation in your terminal — DeckPilot drafts the outline, lets you revise it slide-by-slide, then renders a real `.pptx` you can hand off. Same terminal UX feel as Claude Code or GitHub Copilot CLI, with `pptxgenjs` as the renderer.
 
-> **Status:** v0.6 — visual quality overhaul phase 2. The renderer composes cards / kickers / numbered grids / footer bands instead of plain text-on-white, the LLM is governed by a single `DesignSystem` locked in per deck, and the agent can **see its own slides** via LibreOffice-rendered previews and revise them until they look right. Three reference-quality slide types ship in v0.5; the agentic critique loop is new in v0.6.
+> **Status:** v0.7 — visual quality overhaul complete. Card-based composition (v0.5), agentic critique loop (v0.6), and now five bundled style presets + `DECKPILOT.md` style-guide ingestion + an expanded glyph library (v0.7). `deckpilot` chats from a directory with a `DECKPILOT.md` produce decks that honour your standing style rules; otherwise the agent picks a preset (`editorial` / `minimal-executive` / `energetic-startup` / `corporate-blue` / `studious-academic`) and runs with it.
 
 ---
 
@@ -103,6 +103,8 @@ You drop into an Ink-rendered chat with the Copilot SDK as the brain. Anything y
 | `/template` | Show the currently-loaded template |
 | `/critique <id>` | Force the LLM to re-preview a specific slide (resets its budget) |
 | `/critique-passes <n>` | Set how many preview passes per slide (0 disables, max 5) |
+| `/presets` | List the bundled DesignSystem presets the agent can pick |
+| `/style-guide` | Show the active `DECKPILOT.md` (or note that none was found) |
 | `/undo` | Roll back the most recent plan change |
 | `/clear` | Reset the transcript (keep the deck plan) |
 | `/new` | Reset everything |
@@ -211,9 +213,25 @@ This unlinks the global binary and removes the bootstrap clone (if any). It does
 - ✅ **M2** — Outline-first generation: zod-validated `SlidePlan`, LLM tools `propose_outline` / `revise_slide` / `render_deck` / `save_deck`, per-deck `.plan.json` for re-editing.
 - ✅ **M3** — `.pptx` template inheritance (theme + fonts), `@` file picker, plan reload from `.plan.json`, `inspect_template` tool.
 - ✅ **v0.5 — visual overhaul phase 1** — Renderer rewrite around primitives + composition (cards, grids, kickers, CTA pills, footer bands, glyphs). One deck-wide `DesignSystem` governs every slide.
-- ✅ **v0.6 (current) — visual overhaul phase 2** — Agentic critique loop. The LLM renders each slide to a PNG via LibreOffice (`render_slide_preview` tool), sees its own work, and revises if it's not good enough. `--critique-passes` flag + `/critique` / `/critique-passes` slash commands.
-- 🔜 **v0.7** — Bundled style presets (`editorial`, `minimal-executive`, `energetic-startup`), `DECKPILOT.md` style guide ingestion, optional pre-rendered gradient backgrounds.
+- ✅ **v0.6 — visual overhaul phase 2** — Agentic critique loop. The LLM renders each slide to a PNG via LibreOffice (`render_slide_preview` tool), sees its own work, and revises if it's not good enough. `--critique-passes` flag + `/critique` / `/critique-passes` slash commands.
+- ✅ **v0.7 (current) — visual overhaul phase 3** — Five bundled `DesignSystem` presets (editorial, minimal-executive, energetic-startup, corporate-blue, studious-academic), `apply_design_preset` tool, `DECKPILOT.md` project style-guide ingestion, four new glyphs (bars, pie, grid, cursor), `/presets` and `/style-guide` slash commands.
 - 🔜 **M5** — Hardening, telemetry opt-in, cross-platform smoke tests, npm publish.
+
+### DECKPILOT.md — persistent style guidance
+
+Drop a `DECKPILOT.md` file in your working directory (or any ancestor — DeckPilot walks up like git). Anything you write in it becomes a binding style guide the agent honours on every chat from that directory. Plain markdown, no frontmatter.
+
+```markdown
+# DeckPilot style guide
+
+- Always use the `corporate-blue` preset
+- Brand accent: #0F62FE (override accent if needed)
+- Never use serif fonts
+- Footer band: on
+- Slide titles never exceed 6 words
+```
+
+Run `/style-guide` mid-session to confirm the active guide; the agent surfaces a load notice on startup too.
 
 ---
 

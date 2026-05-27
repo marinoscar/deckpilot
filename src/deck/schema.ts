@@ -94,7 +94,18 @@ export type DesignSystem = z.infer<typeof DesignSystemSchema>;
 
 // ---------- compositions ----------
 
-const GlyphEnum = z.enum(['table', 'network', 'equals', 'check', 'cross', 'spark']);
+const GlyphEnum = z.enum([
+  'table',
+  'network',
+  'equals',
+  'check',
+  'cross',
+  'spark',
+  'bars',
+  'pie',
+  'grid',
+  'cursor',
+]);
 export type Glyph = z.infer<typeof GlyphEnum>;
 
 const AccentRef = z.enum(['primary', 'alt']);
