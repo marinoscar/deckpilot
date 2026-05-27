@@ -153,9 +153,30 @@ build() {
 # ---------- link ----------
 link_user() {
   step "Linking globally (npm link)"
-  (cd "$REPO_DIR" && npm link) >/dev/null
+  # IMPORTANT: don't swallow stdout/stderr. If npm link fails for any reason
+  # (peer-dep prompts, EACCES, npm-as-root quirks under WSL/nvm, etc.) the
+  # user has to be able to see why. Earlier versions of this script piped
+  # `npm link` to /dev/null and a silent abort here left users with no
+  # `deckpilot` on PATH and no clue what happened.
+  local link_log
+  link_log="$(mktemp)"
+  if ! (cd "$REPO_DIR" && npm link) >"$link_log" 2>&1; then
+    cat "$link_log" >&2
+    rm -f "$link_log"
+    warn "npm link failed. Falling back to a direct symlink."
+    fallback_symlink && return 0
+    die "Could not install the \`deckpilot\` binary. See output above."
+  fi
+  rm -f "$link_log"
+
   local prefix
   prefix="$(npm prefix -g)"
+  if [ ! -e "$prefix/bin/deckpilot" ]; then
+    warn "npm link reported success but $prefix/bin/deckpilot is missing."
+    warn "Falling back to a direct symlink."
+    fallback_symlink && return 0
+    die "Could not install the \`deckpilot\` binary."
+  fi
   ok "Linked into $prefix/bin/deckpilot"
 
   if ! command -v deckpilot >/dev/null 2>&1; then
@@ -163,12 +184,15 @@ link_user() {
     warn "$bin_dir is not on your PATH yet."
     warn "Add this line to your shell rc (~/.bashrc or ~/.zshrc):"
     printf '\n    %sexport PATH="%s:$PATH"%s\n\n' "$B" "$bin_dir" "$X"
-    if [ -n "${BASH_VERSION:-}" ] || [ -n "${ZSH_VERSION:-}" ]; then
+    # Only prompt interactively when we actually have a TTY. When invoked via
+    # `curl ... | bash`, stdin is the script itself (already exhausted), so
+    # `read` returns EOF; combined with `set -e` that was silently killing the
+    # script. Skip the prompt entirely in that case and just emit instructions.
+    if [ -t 0 ] && { [ -n "${BASH_VERSION:-}" ] || [ -n "${ZSH_VERSION:-}" ]; }; then
       local rc="$HOME/.bashrc"
       [ -n "${ZSH_VERSION:-}" ] && rc="$HOME/.zshrc"
       printf 'Append it to %s now? [Y/n] ' "$rc"
-      read -r ans
-      if [ -z "$ans" ] || [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+      if read -r ans && { [ -z "$ans" ] || [ "$ans" = "y" ] || [ "$ans" = "Y" ]; }; then
         if ! grep -Fqs "$bin_dir" "$rc" 2>/dev/null; then
           printf '\n# added by deckpilot install.sh\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$rc"
           ok "Appended to $rc — open a new shell or run: source $rc"
@@ -176,8 +200,28 @@ link_user() {
           ok "$rc already references $bin_dir"
         fi
       fi
+    else
+      warn "Non-interactive install; not editing your shell rc automatically."
     fi
   fi
+}
+
+# Last-resort symlink when `npm link` won't cooperate (npm-as-root + nvm
+# combinations in WSL have been seen to silently no-op). Drops a direct
+# symlink into the npm-global bin dir, matching what `npm link` would do.
+fallback_symlink() {
+  local prefix bin_dir
+  prefix="$(npm prefix -g 2>/dev/null)"
+  if [ -z "$prefix" ]; then
+    warn "Could not determine npm global prefix; cannot fall back."
+    return 1
+  fi
+  bin_dir="$prefix/bin"
+  mkdir -p "$bin_dir"
+  ln -sf "$REPO_DIR/bin/run.js" "$bin_dir/deckpilot"
+  chmod +x "$REPO_DIR/bin/run.js"
+  ok "Linked $bin_dir/deckpilot → $REPO_DIR/bin/run.js (direct symlink fallback)"
+  return 0
 }
 
 link_system() {
