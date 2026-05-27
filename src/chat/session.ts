@@ -4,7 +4,7 @@ import { UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
 import { buildDeckTools, type DeckToolContext } from '../tools/index.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { applySlidePatch } from '../deck/revise.js';
-import type { Slide, SlidePatch, SlidePlan } from '../deck/schema.js';
+import type { DesignSystem, Slide, SlidePatch, SlidePlan } from '../deck/schema.js';
 import { SlidePlanSchema } from '../deck/schema.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { summarizeTemplate } from '../template/profile.js';
@@ -59,6 +59,13 @@ export class ChatSession {
   private templateListeners = new Set<TemplateListener>();
   /** Where to load a template from on first start, if the user passed one. */
   private requestedTemplatePath: string | undefined;
+
+  /**
+   * The deck-wide design system. Set by the LLM via `set_design_system` or
+   * implicitly through `propose_outline`'s `design` field. Available to slash
+   * commands and the renderer; kept null until the LLM commits one.
+   */
+  private designSystem: DesignSystem | null = null;
 
   constructor(
     private readonly dp: DeckPilotClient,
@@ -205,6 +212,16 @@ export class ChatSession {
     return resolve(process.cwd(), `${slug}.pptx`);
   }
 
+  // ---- design system state ----
+
+  getDesignSystem(): DesignSystem | null {
+    return this.designSystem;
+  }
+
+  setDesignSystem(ds: DesignSystem): void {
+    this.designSystem = ds;
+  }
+
   private toolContext(): DeckToolContext {
     return {
       getPlan: () => this.plan,
@@ -213,6 +230,8 @@ export class ChatSession {
       defaultOutputPath: () => this.defaultOutputPath(),
       getTemplate: () => this.template,
       loadTemplate: (p) => this.loadTemplate(p),
+      getDesignSystem: () => this.designSystem,
+      setDesignSystem: (ds) => this.setDesignSystem(ds),
     };
   }
 

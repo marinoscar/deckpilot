@@ -3,11 +3,14 @@ import type { Tool } from '@github/copilot-sdk';
 import { z } from 'zod';
 
 import {
+  DesignSystemSchema,
   SlidePlanSchema,
   SlidePatchSchema,
+  SlideSchema,
   formatZodError,
-  type SlidePlan,
+  type DesignSystem,
   type Slide,
+  type SlidePlan,
 } from '../deck/schema.js';
 import { applySlidePatch, summarizePlan, summarizeSlide } from '../deck/revise.js';
 import { renderPlan } from '../render/renderer.js';
@@ -27,6 +30,8 @@ export type DeckToolContext = {
   defaultOutputPath: () => string;
   getTemplate: () => TemplateProfile | null;
   loadTemplate: (path: string) => Promise<TemplateProfile>;
+  getDesignSystem: () => DesignSystem | null;
+  setDesignSystem: (ds: DesignSystem) => void;
 };
 
 type ToolResult<T = unknown> =
@@ -58,7 +63,7 @@ const SaveArgs = z.object({
 const ReviseArgs = z.object({
   slideId: z.string().min(1).describe('The id of the slide to patch (see propose_outline output).'),
   patch: SlidePatchSchema.describe(
-    'Partial slide fields to overwrite. Cannot change layout. Use propose_outline to switch layouts.',
+    'Partial slide fields to overwrite. The whole `body` is replaced atomically — patches cannot deep-merge into a composition.',
   ),
 });
 
@@ -68,20 +73,53 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
   // generic is invariant). Cast each tool to `Tool` (= Tool<unknown>) at the
   // boundary.
   const tools: Tool[] = [
+    defineTool('set_design_system', {
+      description: [
+        'Establish the deck-wide visual guideline. Call this EXACTLY ONCE per deck, BEFORE propose_outline.',
+        'Pick a coherent palette (one primary accent + one supporting alt accent), a font pair, a tone',
+        '(editorial / minimal / corporate / energetic / studious), and decorative habits (kickers,',
+        'footer band, card style). All subsequent slides will be composed against this guideline so the',
+        'deck feels designed end-to-end, not assembled. If the user gave you style hints, honour them.',
+        'If they did not, default to tone="editorial", a navy + red palette, kickers on, footer band on.',
+      ].join(' '),
+      parameters: DesignSystemSchema,
+      skipPermission: true,
+      handler: async (ds): Promise<ToolResult<{ summary: string }>> => {
+        const parsed = DesignSystemSchema.safeParse(ds);
+        if (!parsed.success) {
+          return {
+            ok: false,
+            error: 'DesignSystem failed validation:\n' + formatZodError(parsed.error),
+          };
+        }
+        ctx.setDesignSystem(parsed.data);
+        const d = parsed.data;
+        const summary = `tone=${d.tone}, accent=#${d.accent}, accentAlt=#${d.accentAlt}, fonts=${d.fontHeading}/${d.fontBody}, cardStyle=${d.cardStyle}, kickers=${d.useKickers}`;
+        return {
+          ok: true,
+          message: 'Design system locked. Now call propose_outline.',
+          data: { summary },
+        };
+      },
+    }) as Tool,
+
     defineTool('propose_outline', {
       description: [
-        'Author or replace the working SlidePlan. ALWAYS your first move when the user asks for a deck.',
-        'Pick layouts thoughtfully: title (opener), content (most slides — title + 3-6 bullets),',
-        'two-col (comparisons), section (divider before a new chapter), quote (a single pull quote),',
-        'closing (thanks / contact). Keep bullets concise (≤ ~80 chars), aim for 4-5 per content slide,',
-        'and ALWAYS populate speaker notes. Slide ids should be short and stable (e.g. "s1", "s2").',
+        'Author or replace the working SlidePlan. Call AFTER set_design_system.',
+        'Each slide is composed of: optional kicker (small all-caps signpost), title, subtitle,',
+        'and a body composition. Body composition kinds:',
+        '  prose   — kicker + title + lead paragraph + bullets (for ordinary narrative slides)',
+        '  grid    — 2/3/4-column card layout (use for comparisons, progressions, KPI grids,',
+        '            stage breakdowns; mix-and-match kickers, numbers, glyphs, and CTA pills per card)',
+        '  steps   — horizontal row of numbered badges with titles + descriptions (for process flows)',
+        '  callout — one oversized takeaway sentence (use for "bottom-line" slides)',
+        '  quote   — pull quote with attribution',
+        'Vary composition kinds across the deck — never use prose for every slide. ALWAYS populate',
+        'speaker notes. Slide ids should be short and stable (e.g. "s1", "intro", "team-snapshot").',
       ].join(' '),
       parameters: SlidePlanSchema,
       skipPermission: true,
       handler: async (plan): Promise<ToolResult<{ summary: string }>> => {
-        // The SDK has already zod-validated `plan` against SlidePlanSchema
-        // (because we passed the schema as `parameters`). Defensive re-validate
-        // anyway to keep the renderer contract airtight.
         const parsed = SlidePlanSchema.safeParse(plan);
         if (!parsed.success) {
           return {
@@ -91,9 +129,11 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           };
         }
         ctx.setPlan(parsed.data);
+        // Keep the session-level design system in sync with what's in the plan.
+        ctx.setDesignSystem(parsed.data.design);
         return {
           ok: true,
-          message: `Outline accepted (${parsed.data.slides.length} slides). Use revise_slide to refine individual slides, then render_deck to write the .pptx.`,
+          message: `Outline accepted (${parsed.data.slides.length} slides). Refine with revise_slide; write with render_deck or save_deck.`,
           data: { summary: summarizePlan(parsed.data) },
         };
       },
@@ -102,7 +142,8 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
     defineTool('revise_slide', {
       description: [
         'Patch a single slide in the working plan. Only include fields you want to change.',
-        'Cannot change a slide\'s `layout` — to do that, call propose_outline with the whole plan again.',
+        'The body field is atomic — to change composition kind, send a complete new body object.',
+        'If you want to change the deck-wide design system, do NOT use this; call set_design_system.',
       ].join(' '),
       parameters: ReviseArgs,
       skipPermission: true,
@@ -125,7 +166,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           return {
             ok: false,
             error: (e as Error).message,
-            hint: 'Verify the slide id, and that the patched fields are valid for that slide\'s layout.',
+            hint: 'Verify the slide id and that the patched fields are valid.',
           };
         }
       },
@@ -133,7 +174,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
 
     defineTool('render_deck', {
       description:
-        'Render the current SlidePlan to a .pptx on disk. Returns the absolute path. Call this when the user signals they\'re happy with the outline (or earlier if they ask for a draft).',
+        "Render the current SlidePlan to a .pptx on disk. Returns the absolute path. Call this when the user signals they're happy with the outline (or earlier if they ask for a draft).",
       parameters: RenderArgs,
       skipPermission: true,
       handler: async (args): Promise<ToolResult<{ path: string; slides: number }>> => {
