@@ -16,10 +16,15 @@ import { Transcript } from './Transcript.js';
 
 type Status = 'idle' | 'streaming' | 'cancelled' | 'error';
 
-type Props = { session: ChatSession };
+type Props = {
+  session: ChatSession;
+  /** If provided, /quit routes here (e.g. back to the menu) instead of exiting the program. */
+  onExit?: () => void;
+};
 
-export const App: React.FC<Props> = ({ session }) => {
+export const App: React.FC<Props> = ({ session, onExit }) => {
   const { exit } = useApp();
+  const leave = () => (onExit ? onExit() : exit());
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [model, setModel] = useState<string>(session.getModel());
@@ -56,7 +61,7 @@ export const App: React.FC<Props> = ({ session }) => {
       const now = Date.now();
       if (now - lastCtrlC.current < 1200) {
         await session.stop();
-        exit();
+        leave();
         return;
       }
       lastCtrlC.current = now;
@@ -322,7 +327,7 @@ export const App: React.FC<Props> = ({ session }) => {
       }
       case 'quit':
         await session.stop();
-        exit();
+        leave();
         return;
       case 'unknown':
         session.addSystemMessage(`Unknown slash command: ${raw}. Try /help for the list.`);

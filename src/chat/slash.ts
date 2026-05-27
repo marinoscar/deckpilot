@@ -108,7 +108,9 @@ Slash commands:
   /quit, /exit        Exit DeckPilot
 
 Decks autosave to ~/.deckpilot/projects/<name>/ every few seconds. Resume any
-saved project anywhere with: deckpilot resume <name>
+saved project anywhere with: deckpilot resume <name>. Run "deckpilot" with no
+arguments to open the main menu where you can manage projects, templates,
+and settings.
 
 Type "@" in the prompt to insert a path to a .pptx or .brief.json in the
 current directory (handy for /template, /load, or referencing files in chat).
