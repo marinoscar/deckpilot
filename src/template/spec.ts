@@ -36,7 +36,9 @@ export const TemplateAssetsSchema = z.object({
     'Primary brand mark. Path relative to the template dir, e.g. "assets/logo.png".',
   ),
   wordmark: RelativePath.optional().describe('Wordmark / type lockup if separate from the logo.'),
-  background: RelativePath.optional().describe('Optional background image used on covers or section dividers.'),
+  background: RelativePath.optional().describe(
+    'Optional background image used on covers or section dividers.',
+  ),
 });
 export type TemplateAssets = z.infer<typeof TemplateAssetsSchema>;
 
@@ -56,7 +58,9 @@ export const TemplateSpecSchema = z.object({
     .string()
     .max(2048)
     .optional()
-    .describe('Bullet list of must/never rules ("never use "utilize"; always capitalize "Cloud"").'),
+    .describe(
+      'Bullet list of must/never rules ("never use "utilize"; always capitalize "Cloud"").',
+    ),
   guidance: Guidance.optional().describe(
     'Long-form style guidance — composition habits, taboos, references. Appended to the system prompt.',
   ),

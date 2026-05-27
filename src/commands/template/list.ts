@@ -1,7 +1,7 @@
 import { BaseCommand } from '../../cli/base-command.js';
+import { templatesRoot } from '../../store/paths.js';
 import { listTemplates } from '../../store/templates.js';
 import { summarizeTemplate } from '../../template/spec.js';
-import { templatesRoot } from '../../store/paths.js';
 
 export default class TemplateList extends BaseCommand {
   static override description = 'List all DeckPilot templates saved under ~/.deckpilot/templates/.';

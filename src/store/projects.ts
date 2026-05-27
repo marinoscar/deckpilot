@@ -24,8 +24,8 @@ import {
 } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
-import { DeckBriefSchema, formatZodError, type DeckBrief } from '../deck/brief.js';
 import type { TranscriptEntry } from '../chat/session-types.js';
+import { type DeckBrief, DeckBriefSchema, formatZodError } from '../deck/brief.js';
 import { projectDir, projectsRoot, slugify } from './paths.js';
 
 export class ProjectNotFoundError extends Error {
@@ -46,12 +46,21 @@ export class ProjectExistsError extends Error {
 
 export const ProjectManifestSchema = z.object({
   schemaVersion: z.literal('1.0').default('1.0'),
-  name: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/),
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9-]+$/),
   createdAt: z.string(),
   updatedAt: z.string(),
   /** Copilot SDK session id once a session is created — null on a brand-new project. */
   sessionId: z.string().nullable().default(null),
-  templateName: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/).optional(),
+  templateName: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9-]+$/)
+    .optional(),
   model: z.string().min(1).max(64).optional(),
   critiquePassesPerSlide: z.number().int().min(0).max(5).default(3),
 });
@@ -142,9 +151,7 @@ export async function loadProject(name: string): Promise<ProjectState> {
     const raw = await readFile(briefPath, 'utf8');
     const parsed = DeckBriefSchema.safeParse(JSON.parse(raw));
     if (!parsed.success) {
-      throw new Error(
-        `Project "${name}" has invalid brief.json:\n${formatZodError(parsed.error)}`,
-      );
+      throw new Error(`Project "${name}" has invalid brief.json:\n${formatZodError(parsed.error)}`);
     }
     brief = parsed.data;
   }
@@ -207,11 +214,7 @@ export async function saveBrief(name: string, brief: DeckBrief): Promise<void> {
   await atomicWriteJson(join(dir, 'brief.json'), brief);
 }
 
-export async function saveSlideCode(
-  name: string,
-  slideId: string,
-  code: string,
-): Promise<void> {
+export async function saveSlideCode(name: string, slideId: string, code: string): Promise<void> {
   const slidesDir = join(projectDir(name), 'slides');
   await mkdir(slidesDir, { recursive: true });
   await atomicWriteText(join(slidesDir, `${slideId}.slide.ts`), code);
@@ -232,10 +235,7 @@ export async function saveCritiqueUsage(
 }
 
 /** Append one TranscriptEntry to transcript.jsonl. Cheap; called frequently. */
-export async function appendTranscriptEntry(
-  name: string,
-  entry: TranscriptEntry,
-): Promise<void> {
+export async function appendTranscriptEntry(name: string, entry: TranscriptEntry): Promise<void> {
   const file = join(projectDir(name), 'transcript.jsonl');
   await mkdir(projectDir(name), { recursive: true });
   await appendFile(file, `${JSON.stringify(entry)}\n`);
@@ -279,7 +279,9 @@ async function readManifest(name: string): Promise<ProjectManifest> {
   const raw = await readFile(file, 'utf8');
   const parsed = ProjectManifestSchema.safeParse(JSON.parse(raw));
   if (!parsed.success) {
-    throw new Error(`Project "${name}" manifest failed validation:\n${formatZodError(parsed.error)}`);
+    throw new Error(
+      `Project "${name}" manifest failed validation:\n${formatZodError(parsed.error)}`,
+    );
   }
   return parsed.data;
 }
@@ -290,7 +292,9 @@ async function allocateSlug(name: string | undefined): Promise<string> {
   if (name) {
     const slug = slugify(name);
     if (!slug || slug !== name) {
-      throw new Error(`Bad project name "${name}". Use lower-case kebab (try: ${slug || '<your-name>'}).`);
+      throw new Error(
+        `Bad project name "${name}". Use lower-case kebab (try: ${slug || '<your-name>'}).`,
+      );
     }
     if (existsSync(projectDir(slug))) {
       throw new ProjectExistsError(slug);

@@ -8,7 +8,7 @@
  * a .pptx theme part.
  */
 import { inspectTemplate } from './inspect.js';
-import { TemplateSpecSchema, type TemplateSpec } from './spec.js';
+import { type TemplateSpec, TemplateSpecSchema } from './spec.js';
 
 /**
  * Build a TemplateSpec from a .pptx on disk. Palette, fonts, and aspect are
@@ -31,8 +31,7 @@ export async function templateFromPptx(
   const draft = {
     schemaVersion: '1.0' as const,
     name,
-    description:
-      opts.description ?? `Imported from ${pptxPath.split('/').pop() ?? pptxPath}.`,
+    description: opts.description ?? `Imported from ${pptxPath.split('/').pop() ?? pptxPath}.`,
     brand: opts.brand,
     theme: {
       accent: profile.colors.accent,
@@ -69,11 +68,7 @@ function darkenForFallback(hex: string): string {
   const g = (n >> 8) & 0xff;
   const b = n & 0xff;
   const k = 0.75;
-  return [
-    Math.round(r * k),
-    Math.round(g * k),
-    Math.round(b * k),
-  ]
+  return [Math.round(r * k), Math.round(g * k), Math.round(b * k)]
     .map((v) => v.toString(16).padStart(2, '0').toUpperCase())
     .join('');
 }

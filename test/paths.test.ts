@@ -1,7 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { homeRoot, projectsRoot, templatesRoot, projectDir, templateDir, slugify } from '../src/store/paths.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  homeRoot,
+  projectDir,
+  projectsRoot,
+  slugify,
+  templateDir,
+  templatesRoot,
+} from '../src/store/paths.js';
 
 describe('paths', () => {
   const original = process.env.DECKPILOT_HOME;

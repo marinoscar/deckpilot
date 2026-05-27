@@ -15,19 +15,31 @@ export type CreateSessionOptions = {
   streaming?: boolean;
 };
 
+export type ResumeSessionOptions = {
+  sessionId: string;
+  /** Optional fresh tool list. The SDK rebinds tools on resume. */
+  tools?: Tool[];
+};
+
+export class SessionResumeFailedError extends Error {
+  constructor(
+    public readonly sessionId: string,
+    public readonly cause: Error,
+  ) {
+    super(`Could not resume Copilot session "${sessionId}": ${cause.message}`);
+    this.name = 'SessionResumeFailedError';
+  }
+}
+
 export type DeckPilotClient = {
   client: CopilotClient;
   start: () => Promise<void>;
   stop: () => Promise<void>;
   createSession: (opts: CreateSessionOptions) => Promise<CopilotSession>;
+  resumeSession: (opts: ResumeSessionOptions) => Promise<CopilotSession>;
   listModels: () => Promise<ModelInfo[]>;
 };
 
-/**
- * Display label used when the SDK has not yet reported an active model. Once
- * the session emits its first `session.model_change` event (or the first
- * assistant message arrives), the real model id replaces this label.
- */
 export const UNKNOWN_MODEL_LABEL = '(copilot default)';
 
 export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
@@ -49,10 +61,6 @@ export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
       for (const e of errs) log.warn('SDK stop error:', e?.message ?? e);
     },
     async createSession(o) {
-      // Important: pass `model` through only when the caller explicitly set
-      // one. Omitting it lets the SDK use whatever the user has configured in
-      // their Copilot CLI (`~/.copilot/config.json` / interactive `/model`
-      // selection). Forcing a default here would shadow that choice.
       const session = await client.createSession({
         ...(o.model ? { model: o.model } : {}),
         tools: o.tools,
@@ -66,6 +74,17 @@ export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
           : undefined,
       });
       return session;
+    },
+    async resumeSession(o) {
+      try {
+        const session = await client.resumeSession(o.sessionId, {
+          tools: o.tools,
+          onPermissionRequest: approveAll,
+        });
+        return session;
+      } catch (e) {
+        throw new SessionResumeFailedError(o.sessionId, e as Error);
+      }
     },
     async listModels() {
       return client.listModels();

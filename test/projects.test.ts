@@ -1,24 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DeckBriefSchema } from '../src/deck/brief.js';
-import {
-  createProject,
-  loadProject,
-  listProjects,
-  renameProject,
-  deleteProject,
-  saveBrief,
-  saveSlideCode,
-  saveManifest,
-  saveCritiqueUsage,
-  appendTranscriptEntry,
-  projectExists,
-  ProjectNotFoundError,
-  ProjectExistsError,
-} from '../src/store/projects.js';
 import { projectDir } from '../src/store/paths.js';
+import {
+  ProjectExistsError,
+  ProjectNotFoundError,
+  appendTranscriptEntry,
+  createProject,
+  deleteProject,
+  listProjects,
+  loadProject,
+  projectExists,
+  renameProject,
+  saveBrief,
+  saveCritiqueUsage,
+  saveManifest,
+  saveSlideCode,
+} from '../src/store/projects.js';
 
 const FIXTURE_BRIEF = DeckBriefSchema.parse({
   meta: { title: 'Fixture Deck' },
@@ -72,9 +72,20 @@ describe('projects store', () => {
     await saveBrief('rt', FIXTURE_BRIEF);
     await saveSlideCode('rt', 'cover', 'function render(slide, theme, helpers) {}');
     await saveSlideCode('rt', 'two', 'slide.addText("hi", { x:0, y:0, w:1, h:1 });');
-    await saveCritiqueUsage('rt', new Map([['cover', 2], ['two', 1]]));
+    await saveCritiqueUsage(
+      'rt',
+      new Map([
+        ['cover', 2],
+        ['two', 1],
+      ]),
+    );
     await appendTranscriptEntry('rt', { kind: 'user', id: 'e1', text: 'hello' });
-    await appendTranscriptEntry('rt', { kind: 'assistant', id: 'e2', text: 'hi', streaming: false });
+    await appendTranscriptEntry('rt', {
+      kind: 'assistant',
+      id: 'e2',
+      text: 'hi',
+      streaming: false,
+    });
 
     const loaded = await loadProject('rt');
     expect(loaded.brief?.meta.title).toBe('Fixture Deck');

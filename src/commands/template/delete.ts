@@ -1,6 +1,6 @@
 import { Args, Flags } from '@oclif/core';
 import { BaseCommand } from '../../cli/base-command.js';
-import { deleteTemplate, TemplateNotFoundError } from '../../store/templates.js';
+import { TemplateNotFoundError, deleteTemplate } from '../../store/templates.js';
 
 export default class TemplateDelete extends BaseCommand {
   static override description = 'Delete a saved DeckPilot template (and its assets directory).';
@@ -12,7 +12,10 @@ export default class TemplateDelete extends BaseCommand {
   };
 
   static override flags = {
-    yes: Flags.boolean({ description: 'Confirm the deletion (required — there is no undo).', default: false }),
+    yes: Flags.boolean({
+      description: 'Confirm the deletion (required — there is no undo).',
+      default: false,
+    }),
   };
 
   async run(): Promise<void> {

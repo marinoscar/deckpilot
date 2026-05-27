@@ -10,10 +10,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
-  formatZodError,
-  TemplateSpecSchema,
   type ResolvedTemplate,
   type TemplateSpec,
+  TemplateSpecSchema,
+  formatZodError,
 } from '../template/spec.js';
 import { templateDir, templatesRoot } from './paths.js';
 
@@ -26,7 +26,9 @@ export class TemplateNotFoundError extends Error {
 
 export class TemplateExistsError extends Error {
   constructor(name: string) {
-    super(`Template "${name}" already exists at ${templateDir(name)}. Pass overwrite=true to replace it.`);
+    super(
+      `Template "${name}" already exists at ${templateDir(name)}. Pass overwrite=true to replace it.`,
+    );
     this.name = 'TemplateExistsError';
   }
 }

@@ -149,6 +149,17 @@ theme.accent      theme.accentAlt   theme.ink      theme.muted    theme.paper
 theme.fontHeading theme.fontBody    theme.tone     theme.aspect
 \`\`\`
 
+When a named template is active you also receive \`theme.assets\` (read-only):
+
+\`\`\`
+theme.assets?.logo        // absolute file path to a logo image, or undefined
+theme.assets?.wordmark    // absolute path to a wordmark image, or undefined
+theme.assets?.background  // absolute path to a background image, or undefined
+\`\`\`
+
+Place these via \`slide.addImage({ path: theme.assets.logo, x, y, w, h })\`.
+ALWAYS guard with \`if (theme.assets?.logo)\` — assets are optional.
+
 ## helpers
 
 \`\`\`
@@ -360,4 +371,28 @@ function render(slide, theme, helpers) {
 If a "Project style guide" block appears below this preamble (loaded from
 DECKPILOT.md), its rules are BINDING for this deck — honour palette, fonts,
 content conventions, anything the user has written in.
+
+If an "Active template" block appears below this preamble (loaded from
+~/.deckpilot/templates/<name>/), the template's theme is already locked in.
+Honour the brand voice / copy rules / style guidance verbatim. If logos are
+listed under \`theme.assets\`, place them on covers and section dividers via
+\`slide.addImage\`.
+
+# Named templates (separate from one-shot inspect_template)
+
+DeckPilot has a TEMPLATE LIBRARY at ~/.deckpilot/templates/<name>/. Tools you
+can call to manage and use templates:
+
+- \`list_templates\` — list every saved template.
+- \`use_template({ name })\` — apply a saved template to the current deck
+  (loads its theme + assets + voice/copy/guidance). Call BEFORE
+  propose_deck_brief if the user named one up front.
+- \`save_template(<TemplateSpec>)\` — author a NEW template from a description
+  (e.g. "a luxe black-and-gold deck for jewellery brands"). Provide the full
+  spec; the user can drop a logo into the assets/ directory afterwards.
+- \`import_template_from_pptx({ name, pptxPath })\` — extract palette/fonts
+  from a .pptx and save as a reusable named template.
+
+\`inspect_template\` still exists for one-shot ad-hoc style inheritance that
+should NOT be saved.
 `.trim();

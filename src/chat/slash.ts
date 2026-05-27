@@ -3,13 +3,15 @@ export type SlashCommand =
   | { kind: 'clear' }
   | { kind: 'new' }
   | { kind: 'render'; outputPath?: string }
-  | { kind: 'save'; outputPath?: string }
+  | { kind: 'save'; projectName?: string }
   | { kind: 'outline' }
   | { kind: 'show' }
   | { kind: 'undo' }
   | { kind: 'model'; id?: string }
   | { kind: 'models' }
-  | { kind: 'template'; path?: string }
+  | { kind: 'template'; arg?: string }
+  | { kind: 'templates' }
+  | { kind: 'project'; arg?: string }
   | { kind: 'load'; path?: string }
   | { kind: 'critique'; slideId?: string }
   | { kind: 'critique-passes'; n?: number }
@@ -32,6 +34,8 @@ const KNOWN: Record<string, SlashCommand['kind']> = {
   model: 'model',
   models: 'models',
   template: 'template',
+  templates: 'templates',
+  project: 'project',
   load: 'load',
   critique: 'critique',
   'critique-passes': 'critique-passes',
@@ -51,13 +55,16 @@ export function parseSlash(input: string): SlashParseResult {
     return { kind: 'render', outputPath: tail.join(' ') || undefined };
   }
   if (kind === 'save') {
-    return { kind: 'save', outputPath: tail.join(' ') || undefined };
+    return { kind: 'save', projectName: tail.join(' ').trim() || undefined };
   }
   if (kind === 'model') {
     return { kind: 'model', id: tail.join(' ').trim() || undefined };
   }
   if (kind === 'template') {
-    return { kind: 'template', path: tail.join(' ') || undefined };
+    return { kind: 'template', arg: tail.join(' ').trim() || undefined };
+  }
+  if (kind === 'project') {
+    return { kind: 'project', arg: tail.join(' ').trim() || undefined };
   }
   if (kind === 'load') {
     return { kind: 'load', path: tail.join(' ') || undefined };
@@ -75,27 +82,36 @@ export function parseSlash(input: string): SlashParseResult {
 
 export const HELP_TEXT = `
 Slash commands:
-  /help, /?         Show this help
-  /outline          Compact outline of the current brief (titles + purposes)
-  /show             Full DeckBrief as JSON
-  /render [path]    Render the current deck to .pptx (default: ./<title>.pptx)
-  /save [path]      Render + save brief.json + per-slide .ts sources next to it
-  /load <path>      Load a previously-saved .brief.json as the working brief
-  /template <path>  Inherit theme + fonts from an existing .pptx (style only)
-  /template         Show the currently-loaded template
-  /critique <id>    Force the LLM to re-preview a specific slide (resets its budget)
+  /help, /?           Show this help
+  /outline            Compact outline of the current brief (titles + purposes)
+  /show               Full DeckBrief as JSON
+  /render [path]      Render the current deck to .pptx (default: ./<title>.pptx)
+  /save               Force-flush autosave (the deck saves to ~/.deckpilot/ automatically)
+  /save <name>        Rename the current project + flush
+  /load <path>        Load a previously-saved .brief.json into the current project
+  /project            Show the current project name + path
+  /project <name>     Rename the current project on disk
+  /templates          List every saved named template (under ~/.deckpilot/templates/)
+  /template           Show the currently-applied template
+  /template <name>    Switch to a different saved template
+  /template <path>    Inherit theme + fonts one-shot from a .pptx (no save)
+  /template none      Clear the active template
+  /critique <id>      Force the LLM to re-preview a specific slide (resets its budget)
   /critique-passes <n>  Set how many preview passes per slide (0 disables, max 5)
-  /style-guide      Show the active DECKPILOT.md (or note that none was found)
-  /undo             Roll back the most recent deck change
-  /clear            Clear the transcript (keep the deck)
-  /new              Reset everything (transcript and deck)
-  /model            Show the current LLM model
-  /model <id>       Switch model (history preserved by the SDK)
-  /models           List available models
-  /quit, /exit      Exit DeckPilot
+  /style-guide        Show the active DECKPILOT.md (or note that none was found)
+  /undo               Roll back the most recent deck change
+  /clear              Clear the transcript (keep the deck)
+  /new                Clear the transcript and decouple from the current project
+  /model              Show the current LLM model
+  /model <id>         Switch model (history preserved by the SDK)
+  /models             List available models
+  /quit, /exit        Exit DeckPilot
 
-Type "@" in the prompt to insert a path to a .pptx or .plan.json in the current
-directory (handy for /template, /load, or just referencing files in chat).
+Decks autosave to ~/.deckpilot/projects/<name>/ every few seconds. Resume any
+saved project anywhere with: deckpilot resume <name>
+
+Type "@" in the prompt to insert a path to a .pptx or .brief.json in the
+current directory (handy for /template, /load, or referencing files in chat).
 
 Anything not starting with / is sent to GitHub Copilot.
 `.trim();

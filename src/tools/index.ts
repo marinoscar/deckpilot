@@ -15,8 +15,19 @@ import {
 } from '../render/preview.js';
 import { SlideCodeError, renderDeck } from '../render/renderer.js';
 import { runSlideCode } from '../render/sandbox.js';
+import {
+  TemplateNotFoundError as NamedTemplateNotFoundError,
+  listTemplates as listNamedTemplates,
+  saveTemplate as saveNamedTemplate,
+} from '../store/templates.js';
+import { templateFromPptx } from '../template/from-pptx.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { summarizeTemplate } from '../template/profile.js';
+import {
+  TemplateSpecSchema,
+  formatZodError as formatTemplateError,
+  summarizeTemplate as summarizeTemplateSpec,
+} from '../template/spec.js';
 // biome-ignore lint/suspicious/noExplicitAny: pptxgenjs has no exported constructor type
 const PptxGenJS = pptxgenjsImport as unknown as new () => any;
 
@@ -33,6 +44,10 @@ export type DeckToolContext = {
   defaultOutputPath: () => string;
   getTemplate: () => TemplateProfile | null;
   loadTemplate: (path: string) => Promise<TemplateProfile>;
+  /** Apply a named template from ~/.deckpilot/templates/ to the active session. */
+  useNamedTemplate: (name: string) => Promise<void>;
+  /** Active named template, if any. */
+  getActiveTemplateName: () => string | undefined;
   /** Hard cap on critique/preview calls per slide. 0 disables visual critique. */
   critiquePassesPerSlide: () => number;
   consumeCritiquePass: (slideId: string) => { remaining: number; allowed: boolean };
@@ -424,7 +439,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
 
     defineTool('inspect_template', {
       description:
-        'Load a `.pptx` whose theme (accent colour, fonts) should be inherited by subsequent renders. The slides in the template file are NOT imported — only its visual style. Returns a one-paragraph summary so you can react to it when proposing the theme.',
+        'Load a `.pptx` whose theme (accent colour, fonts) should be inherited by subsequent renders ONE-SHOT (not saved as a template). The slides in the template file are NOT imported — only its visual style. Use `import_template_from_pptx` instead if the user wants a reusable named template.',
       parameters: z.object({
         path: z
           .string()
@@ -449,6 +464,132 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
             error: `Template load failed: ${(e as Error).message}`,
             hint: 'Verify the path is a valid .pptx file.',
           };
+        }
+      },
+    }) as Tool,
+
+    defineTool('list_templates', {
+      description:
+        'List every named DeckPilot template saved under ~/.deckpilot/templates/. Useful when the user says "use my acme template" and you want to confirm the name first, or when offering options at the start of a deck.',
+      parameters: z.object({}),
+      skipPermission: true,
+      handler: async (): Promise<ToolResult<{ templates: string[] }>> => {
+        const list = await listNamedTemplates();
+        if (list.length === 0) {
+          return {
+            ok: true,
+            message:
+              'No named templates saved yet. Suggest the user run `deckpilot template create <name>` or ask you to author one via `save_template`.',
+            data: { templates: [] },
+          };
+        }
+        const summaries = list.map((e) => summarizeTemplateSpec(e.spec));
+        return {
+          ok: true,
+          message: summaries.join('\n'),
+          data: { templates: list.map((e) => e.name) },
+        };
+      },
+    }) as Tool,
+
+    defineTool('use_template', {
+      description:
+        'Apply a saved named template (theme + optional logo + voice/copy/guidance) to the active deck. Once applied, your generated slide code receives the template`s palette as `theme` and its logo as `theme.assets.logo`; any voiceHints/copyRules/guidance are folded into your system prompt. Call this BEFORE propose_deck_brief if the user named a template up front.',
+      parameters: z.object({
+        name: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z0-9-]+$/, 'Template names are lower-case kebab.')
+          .describe('Name of the template (matches the directory under ~/.deckpilot/templates/).'),
+      }),
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ summary: string }>> => {
+        try {
+          await ctx.useNamedTemplate(args.name);
+          const list = await listNamedTemplates();
+          const entry = list.find((e) => e.name === args.name);
+          return {
+            ok: true,
+            message: `Template "${args.name}" applied.`,
+            data: { summary: entry ? summarizeTemplateSpec(entry.spec) : args.name },
+          };
+        } catch (e) {
+          if (e instanceof NamedTemplateNotFoundError) {
+            return {
+              ok: false,
+              error: e.message,
+              hint: 'Call list_templates to see what names are available, or ask the user.',
+            };
+          }
+          return {
+            ok: false,
+            error: `Could not use template "${args.name}": ${(e as Error).message}`,
+          };
+        }
+      },
+    }) as Tool,
+
+    defineTool('save_template', {
+      description:
+        'Save a hand-authored TemplateSpec to ~/.deckpilot/templates/<name>/. Use this when the user wants you to invent a reusable template (e.g. "create a luxe black-and-gold template called luxe-jewellery"). Provide the FULL spec — palette, fonts, tone, aspect, plus any voiceHints/copyRules/guidance you want to bake in. To attach a logo file, the user must drop it into the template`s assets/ directory after creation.',
+      parameters: TemplateSpecSchema,
+      skipPermission: true,
+      handler: async (spec): Promise<ToolResult<{ rootDir: string }>> => {
+        const parsed = TemplateSpecSchema.safeParse(spec);
+        if (!parsed.success) {
+          return {
+            ok: false,
+            error: `TemplateSpec failed validation:\n${formatTemplateError(parsed.error)}`,
+            hint: 'Fix the offending fields and resend.',
+          };
+        }
+        try {
+          const { rootDir } = await saveNamedTemplate(parsed.data);
+          return {
+            ok: true,
+            message: `Saved template "${parsed.data.name}" to ${rootDir}. The user can drop logos into ${rootDir}/assets/ and rerun use_template.`,
+            data: { rootDir },
+          };
+        } catch (e) {
+          return { ok: false, error: `Save failed: ${(e as Error).message}` };
+        }
+      },
+    }) as Tool,
+
+    defineTool('import_template_from_pptx', {
+      description:
+        'Extract palette + fonts + aspect from a `.pptx` and save the result as a NAMED template under ~/.deckpilot/templates/<name>/. Use when the user wants a reusable template seeded from an existing deck (vs `inspect_template`, which only borrows the theme for the current session). Logos / voice / brand metadata are left empty for the user to fill in afterwards.',
+      parameters: z.object({
+        name: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z0-9-]+$/, 'Template names are lower-case kebab.')
+          .describe('Name for the new template (becomes the directory name).'),
+        pptxPath: z
+          .string()
+          .min(1)
+          .max(512)
+          .describe('Path (relative to cwd or absolute) to a .pptx whose theme to import.'),
+        brand: z.string().min(1).max(160).optional(),
+        description: z.string().min(1).max(160).optional(),
+      }),
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ rootDir: string }>> => {
+        try {
+          const spec = await templateFromPptx(args.name, args.pptxPath, {
+            brand: args.brand,
+            description: args.description,
+          });
+          const { rootDir } = await saveNamedTemplate(spec);
+          return {
+            ok: true,
+            message: `Imported "${args.pptxPath}" → template "${args.name}" at ${rootDir}. Tell the user they can edit ${rootDir}/template.json to add voice/copy guidance and drop logos into ${rootDir}/assets/.`,
+            data: { rootDir },
+          };
+        } catch (e) {
+          return { ok: false, error: `Import failed: ${(e as Error).message}` };
         }
       },
     }) as Tool,

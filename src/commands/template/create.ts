@@ -1,10 +1,10 @@
 import { Args, Flags } from '@oclif/core';
 import { BaseCommand } from '../../cli/base-command.js';
-import { saveTemplate, templateExists } from '../../store/templates.js';
-import { blankTemplate } from '../../template/spec.js';
-import { templateFromPptx } from '../../template/from-pptx.js';
 import { templateDir } from '../../store/paths.js';
 import { slugify } from '../../store/paths.js';
+import { saveTemplate, templateExists } from '../../store/templates.js';
+import { templateFromPptx } from '../../template/from-pptx.js';
+import { blankTemplate } from '../../template/spec.js';
 
 export default class TemplateCreate extends BaseCommand {
   static override description =
@@ -16,14 +16,24 @@ export default class TemplateCreate extends BaseCommand {
   ];
 
   static override args = {
-    name: Args.string({ required: true, description: 'Template name (lower-case kebab; matches the directory).' }),
+    name: Args.string({
+      required: true,
+      description: 'Template name (lower-case kebab; matches the directory).',
+    }),
   };
 
   static override flags = {
-    from: Flags.string({ description: 'Path to a .pptx whose theme should be imported.', required: false }),
-    brand: Flags.string({ description: 'Optional brand name to embed in the spec.', required: false }),
+    from: Flags.string({
+      description: 'Path to a .pptx whose theme should be imported.',
+      required: false,
+    }),
+    brand: Flags.string({
+      description: 'Optional brand name to embed in the spec.',
+      required: false,
+    }),
     overwrite: Flags.boolean({
-      description: 'Overwrite an existing template.json with the same name. Asset files in assets/ are left alone.',
+      description:
+        'Overwrite an existing template.json with the same name. Asset files in assets/ are left alone.',
       default: false,
     }),
   };
@@ -37,7 +47,9 @@ export default class TemplateCreate extends BaseCommand {
       );
     }
     if (!flags.overwrite && (await templateExists(slug))) {
-      this.fail(`Template "${slug}" already exists at ${templateDir(slug)}. Pass --overwrite to replace it.`);
+      this.fail(
+        `Template "${slug}" already exists at ${templateDir(slug)}. Pass --overwrite to replace it.`,
+      );
     }
 
     const spec = flags.from
@@ -46,8 +58,10 @@ export default class TemplateCreate extends BaseCommand {
 
     const { rootDir } = await saveTemplate(spec, { overwrite: flags.overwrite });
     this.log(`Created template "${slug}" at ${rootDir}`);
-    this.log(`  template.json  · the spec (edit by hand to add voiceHints, copyRules, guidance)`);
-    this.log(`  assets/        · drop logo.png / wordmark.svg here and reference them in template.json`);
+    this.log('  template.json  · the spec (edit by hand to add voiceHints, copyRules, guidance)');
+    this.log(
+      '  assets/        · drop logo.png / wordmark.svg here and reference them in template.json',
+    );
     if (flags.from) {
       this.log(`  Imported palette + fonts from ${flags.from}.`);
     }

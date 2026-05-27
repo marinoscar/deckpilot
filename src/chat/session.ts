@@ -7,15 +7,32 @@ import {
   renderStyleGuideBlock,
 } from '../config/project.js';
 import type { DeckPilotClient } from '../copilot/client.js';
-import { UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
+import { SessionResumeFailedError, UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
 import { type DeckBrief, DeckBriefSchema } from '../deck/brief.js';
+import {
+  type ProjectManifest,
+  type ProjectState,
+  appendTranscriptEntry,
+  createProject,
+  deleteSlideCode,
+  loadProject,
+  projectExists,
+  renameProject,
+  saveBrief,
+  saveCritiqueUsage,
+  saveManifest,
+  saveSlideCode,
+} from '../store/projects.js';
+import { TemplateNotFoundError, loadTemplate as loadNamedTemplate } from '../store/templates.js';
 import { inspectTemplate } from '../template/inspect.js';
 import type { TemplateProfile } from '../template/profile.js';
-import { summarizeTemplate } from '../template/profile.js';
+import { summarizeTemplate as summarizeTemplateProfile } from '../template/profile.js';
+import type { ResolvedTemplate } from '../template/spec.js';
+import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
-import { SYSTEM_PROMPT } from './system-prompt.js';
 import type { TranscriptEntry } from './session-types.js';
+import { SYSTEM_PROMPT } from './system-prompt.js';
 export type { TranscriptEntry };
 
 export type SessionListener = (entries: TranscriptEntry[]) => void;
@@ -23,15 +40,24 @@ export type ModelListener = (model: string) => void;
 export type BusyListener = (busy: boolean) => void;
 export type BriefListener = (brief: DeckBrief | null) => void;
 export type TemplateListener = (template: TemplateProfile | null) => void;
+export type ProjectListener = (manifest: ProjectManifest | null) => void;
 
 export type ChatSessionOptions = {
   model?: string;
+  /** One-shot .pptx style inheritance, no save. Back-compat path. */
   templatePath?: string;
   critiquePassesPerSlide?: number;
+  /** Resume / create a named project under ~/.deckpilot/projects/. */
+  projectName?: string;
+  /** Load a named template from ~/.deckpilot/templates/ before chat starts. */
+  templateName?: string;
+  /** Skip the project store entirely (tests, /render dry-runs). */
+  ephemeral?: boolean;
 };
 
 const MAX_CRITIQUE_PASSES = 5;
 const UNDO_DEPTH = 20;
+const SAVE_DEBOUNCE_MS = 250;
 
 type BriefSnapshot = {
   brief: DeckBrief | null;
@@ -52,20 +78,39 @@ export class ChatSession {
 
   /** Working DeckBrief. Mutated by tools and slash commands. */
   private brief: DeckBrief | null = null;
-  /** Per-slide LLM-generated rendering code, keyed by slide id. */
   private slideCode = new Map<string, string>();
-  /** Snapshot stack for `/undo`. Captures both brief and code map. */
+  /** Slide ids whose code was deleted (e.g. brief replaced) — flushed by removing the file. */
+  private slideCodeDeletions = new Set<string>();
   private undoStack: BriefSnapshot[] = [];
   private briefListeners = new Set<BriefListener>();
 
+  /** Legacy one-shot .pptx inspection. Kept for back-compat. */
   private template: TemplateProfile | null = null;
   private templateListeners = new Set<TemplateListener>();
   private requestedTemplatePath: string | undefined;
+
+  /** Named template loaded from ~/.deckpilot/templates/<name>/. */
+  private resolvedTemplate: ResolvedTemplate | null = null;
+  private requestedTemplateName: string | undefined;
 
   private critiquePasses = 3;
   private critiqueUsage = new Map<string, number>();
 
   private styleGuide: ProjectStyleGuide | null = null;
+
+  // ---- project state ----
+  private project: ProjectState | null = null;
+  private projectListeners = new Set<ProjectListener>();
+  private requestedProjectName: string | undefined;
+  private ephemeral = false;
+
+  // ---- autosave bookkeeping ----
+  private dirtyBrief = false;
+  private dirtySlides = new Set<string>();
+  private dirtyUsage = false;
+  private dirtyManifest = false;
+  private saveTimer: NodeJS.Timeout | null = null;
+  private flushPromise: Promise<void> | null = null;
 
   constructor(
     private readonly dp: DeckPilotClient,
@@ -74,6 +119,9 @@ export class ChatSession {
     this.requestedModel = opts.model;
     this.activeModel = opts.model ?? null;
     this.requestedTemplatePath = opts.templatePath;
+    this.requestedTemplateName = opts.templateName;
+    this.requestedProjectName = opts.projectName;
+    this.ephemeral = opts.ephemeral === true;
     if (typeof opts.critiquePassesPerSlide === 'number') {
       this.critiquePasses = clampCritique(opts.critiquePassesPerSlide);
     }
@@ -129,13 +177,17 @@ export class ChatSession {
 
   setBrief(brief: DeckBrief): void {
     this.pushSnapshot();
-    // Replacing the brief drops slide code whose ids no longer exist.
     const validIds = new Set(brief.slides.map((s) => s.id));
     for (const id of [...this.slideCode.keys()]) {
-      if (!validIds.has(id)) this.slideCode.delete(id);
+      if (!validIds.has(id)) {
+        this.slideCode.delete(id);
+        this.slideCodeDeletions.add(id);
+      }
     }
     this.brief = brief;
+    this.dirtyBrief = true;
     this.emitBrief();
+    this.scheduleSave();
   }
 
   getSlideCode(id: string): string | null {
@@ -145,7 +197,10 @@ export class ChatSession {
   setSlideCode(id: string, code: string): void {
     this.pushSnapshot();
     this.slideCode.set(id, code);
+    this.slideCodeDeletions.delete(id);
+    this.dirtySlides.add(id);
     this.emitBrief();
+    this.scheduleSave();
   }
 
   getAllSlideCode(): ReadonlyMap<string, string> {
@@ -160,13 +215,20 @@ export class ChatSession {
     if (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift();
   }
 
-  /** Roll back one revision. Returns true if anything was undone. */
   undo(): boolean {
     const snap = this.undoStack.pop();
     if (!snap) return false;
+    // Compute slide-id diff for autosave.
+    const wantIds = new Set(snap.slideCode.keys());
+    for (const id of [...this.slideCode.keys()]) {
+      if (!wantIds.has(id)) this.slideCodeDeletions.add(id);
+    }
+    for (const id of wantIds) this.dirtySlides.add(id);
     this.brief = snap.brief;
     this.slideCode = new Map(snap.slideCode);
+    this.dirtyBrief = true;
     this.emitBrief();
+    this.scheduleSave();
     return true;
   }
 
@@ -180,6 +242,14 @@ export class ChatSession {
     return this.template;
   }
 
+  getResolvedTemplate(): ResolvedTemplate | null {
+    return this.resolvedTemplate;
+  }
+
+  getActiveTemplateName(): string | undefined {
+    return this.resolvedTemplate?.name;
+  }
+
   onTemplateChange(fn: TemplateListener): () => void {
     this.templateListeners.add(fn);
     fn(this.template);
@@ -188,6 +258,7 @@ export class ChatSession {
     };
   }
 
+  /** Load a one-shot .pptx for theme inheritance (legacy, no persistence). */
   async loadTemplate(path: string): Promise<TemplateProfile> {
     const profile = await inspectTemplate(path);
     this.template = profile;
@@ -195,18 +266,37 @@ export class ChatSession {
     return profile;
   }
 
-  clearTemplate(): void {
-    if (!this.template) return;
-    this.template = null;
-    for (const fn of this.templateListeners) fn(null);
+  /** Load a named template from ~/.deckpilot/templates/<name>/. */
+  async useNamedTemplate(name: string): Promise<ResolvedTemplate> {
+    const resolved = await loadNamedTemplate(name);
+    this.resolvedTemplate = resolved;
+    if (this.project) {
+      this.project.manifest = { ...this.project.manifest, templateName: name };
+      this.dirtyManifest = true;
+      this.scheduleSave();
+    }
+    return resolved;
   }
 
-  /**
-   * Load a previously-saved DeckPilot `.brief.json` as the working brief. The
-   * file MUST validate against the current schema; slide code is NOT loaded
-   * by this entry point — call /load-slides separately if you have the .ts
-   * files saved alongside.
-   */
+  clearTemplate(): void {
+    let changed = false;
+    if (this.template) {
+      this.template = null;
+      for (const fn of this.templateListeners) fn(null);
+      changed = true;
+    }
+    if (this.resolvedTemplate) {
+      this.resolvedTemplate = null;
+      changed = true;
+    }
+    if (changed && this.project) {
+      this.project.manifest = { ...this.project.manifest, templateName: undefined };
+      this.dirtyManifest = true;
+      this.scheduleSave();
+    }
+  }
+
+  /** Legacy: load a brief.json sibling file as the working brief. */
   async loadBriefFromFile(path: string): Promise<DeckBrief> {
     const raw = await readFile(resolve(process.cwd(), path), 'utf8');
     let json: unknown;
@@ -228,7 +318,7 @@ export class ChatSession {
   }
 
   defaultOutputPath(): string {
-    const title = this.brief?.meta.title ?? 'deckpilot-output';
+    const title = this.brief?.meta.title ?? this.project?.manifest.name ?? 'deckpilot-output';
     const slug =
       title
         .toLowerCase()
@@ -236,6 +326,40 @@ export class ChatSession {
         .replace(/^-+|-+$/g, '')
         .slice(0, 60) || 'deckpilot-output';
     return resolve(process.cwd(), `${slug}.pptx`);
+  }
+
+  // ---- project state ----
+
+  getProjectName(): string | null {
+    return this.project?.manifest.name ?? null;
+  }
+
+  getProjectManifest(): ProjectManifest | null {
+    return this.project?.manifest ?? null;
+  }
+
+  onProjectChange(fn: ProjectListener): () => void {
+    this.projectListeners.add(fn);
+    fn(this.project?.manifest ?? null);
+    return () => {
+      this.projectListeners.delete(fn);
+    };
+  }
+
+  private emitProject(): void {
+    for (const fn of this.projectListeners) fn(this.project?.manifest ?? null);
+  }
+
+  /** Rename the current project on disk. Atomic dir rename + manifest rewrite. */
+  async renameCurrentProject(newName: string): Promise<void> {
+    if (!this.project) throw new Error('No active project to rename.');
+    if (this.ephemeral) throw new Error('Cannot rename in ephemeral mode.');
+    await this.flush();
+    const old = this.project.manifest.name;
+    if (newName === old) return;
+    const next = await renameProject(old, newName);
+    this.project = next;
+    this.emitProject();
   }
 
   // ---- critique state ----
@@ -247,6 +371,15 @@ export class ChatSession {
   setCritiquePasses(n: number): number {
     this.critiquePasses = clampCritique(n);
     this.critiqueUsage.clear();
+    if (this.project) {
+      this.project.manifest = {
+        ...this.project.manifest,
+        critiquePassesPerSlide: this.critiquePasses,
+      };
+      this.dirtyManifest = true;
+      this.dirtyUsage = true;
+      this.scheduleSave();
+    }
     return this.critiquePasses;
   }
 
@@ -255,11 +388,15 @@ export class ChatSession {
     const used = this.critiqueUsage.get(slideId) ?? 0;
     if (used >= this.critiquePasses) return { allowed: false, remaining: 0 };
     this.critiqueUsage.set(slideId, used + 1);
+    this.dirtyUsage = true;
+    this.scheduleSave();
     return { allowed: true, remaining: this.critiquePasses - (used + 1) };
   }
 
   resetCritiqueUsage(slideId: string): void {
     this.critiqueUsage.delete(slideId);
+    this.dirtyUsage = true;
+    this.scheduleSave();
   }
 
   // ---- project style guide ----
@@ -283,6 +420,10 @@ export class ChatSession {
       defaultOutputPath: () => this.defaultOutputPath(),
       getTemplate: () => this.template,
       loadTemplate: (p) => this.loadTemplate(p),
+      useNamedTemplate: async (name: string) => {
+        await this.useNamedTemplate(name);
+      },
+      getActiveTemplateName: () => this.getActiveTemplateName(),
       critiquePassesPerSlide: () => this.critiquePasses,
       consumeCritiquePass: (id) => this.consumeCritiquePass(id),
     };
@@ -292,39 +433,127 @@ export class ChatSession {
 
   async start(): Promise<void> {
     await this.dp.start();
+
+    // Style guide (DECKPILOT.md) — per-cwd-tree, optional.
     try {
       this.styleGuide = await loadStyleGuide();
     } catch (e) {
       log.warn('DECKPILOT.md load failed:', (e as Error).message);
       this.styleGuide = null;
     }
-    const systemPrompt = this.styleGuide
-      ? `${SYSTEM_PROMPT}\n\n${renderStyleGuideBlock(this.styleGuide)}`
-      : SYSTEM_PROMPT;
 
-    this.session = await this.dp.createSession({
-      systemPrompt,
-      tools: buildDeckTools(this.toolContext()),
-      streaming: true,
-      model: this.requestedModel,
-    });
+    // Project hydration.
+    if (!this.ephemeral) {
+      try {
+        if (this.requestedProjectName && (await projectExists(this.requestedProjectName))) {
+          this.project = await loadProject(this.requestedProjectName);
+          this.brief = this.project.brief;
+          this.slideCode = new Map(this.project.slideCode);
+          this.critiqueUsage = new Map(this.project.critiqueUsage);
+          this.transcript = [...this.project.transcript];
+          this.critiquePasses = clampCritique(this.project.manifest.critiquePassesPerSlide);
+        } else {
+          this.project = await createProject(this.requestedProjectName, {
+            critiquePassesPerSlide: this.critiquePasses,
+          });
+        }
+      } catch (e) {
+        log.warn('Project initialisation failed:', (e as Error).message);
+        this.project = null;
+      }
+    }
+
+    // Named template (preferred over legacy --template-path).
+    if (this.requestedTemplateName) {
+      try {
+        await this.useNamedTemplate(this.requestedTemplateName);
+      } catch (e) {
+        if (e instanceof TemplateNotFoundError) {
+          this.addSystemMessage(
+            `Template "${this.requestedTemplateName}" not found in ~/.deckpilot/templates/. Continuing without a template.`,
+          );
+        } else {
+          this.addSystemMessage(
+            `Could not load template "${this.requestedTemplateName}": ${(e as Error).message}`,
+          );
+        }
+      }
+    }
+
+    const systemPrompt = this.buildSystemPrompt();
+    const tools = buildDeckTools(this.toolContext());
+
+    // Try to resume the prior SDK session if this project carries one.
+    let resumed = false;
+    const savedSessionId = this.project?.manifest.sessionId ?? null;
+    if (savedSessionId) {
+      try {
+        this.session = await this.dp.resumeSession({ sessionId: savedSessionId, tools });
+        resumed = true;
+      } catch (e) {
+        if (e instanceof SessionResumeFailedError) {
+          this.addSystemMessage(
+            `Could not resume the previous LLM session for "${this.project?.manifest.name}" (Copilot CLI may have evicted its checkpoint). Starting a fresh LLM context — your brief and slide code are intact; the model will re-read them from the project on its next turn.`,
+          );
+          // Drop the stale id so the next user message captures the new one.
+          if (this.project) {
+            this.project.manifest = { ...this.project.manifest, sessionId: null };
+            this.dirtyManifest = true;
+          }
+        } else {
+          throw e;
+        }
+      }
+    }
+    if (!resumed) {
+      this.session = await this.dp.createSession({
+        systemPrompt,
+        tools,
+        streaming: true,
+        model: this.requestedModel,
+      });
+    }
+    if (!this.session) throw new Error('Failed to acquire a Copilot session.');
     this.attachEvents(this.session);
 
+    this.emitBrief();
+    this.emitProject();
+
+    if (this.project) {
+      this.addSystemMessage(`Project "${this.project.manifest.name}" — ${this.project.rootDir}.`);
+    }
     if (this.styleGuide) {
       this.addSystemMessage(
         `Loaded project style guide from ${this.styleGuide.path} (${this.styleGuide.bytes} bytes). Its rules are binding for this deck.`,
       );
     }
+    if (this.resolvedTemplate) {
+      this.addSystemMessage(`Template: ${summarizeTemplateSpec(this.resolvedTemplate)}`);
+    }
     if (this.requestedTemplatePath) {
       try {
         const profile = await this.loadTemplate(this.requestedTemplatePath);
-        this.addSystemMessage(`Template loaded: ${summarizeTemplate(profile)}`);
+        this.addSystemMessage(
+          `One-shot template inherited from ${profile.sourcePath}: ${summarizeTemplateProfile(profile)}`,
+        );
       } catch (e) {
         this.addSystemMessage(
           `Could not load template from ${this.requestedTemplatePath}: ${(e as Error).message}`,
         );
       }
     }
+  }
+
+  /** Compose the system prompt with optional template guidance + DECKPILOT.md. */
+  private buildSystemPrompt(): string {
+    const parts: string[] = [SYSTEM_PROMPT];
+    if (this.resolvedTemplate) {
+      parts.push(renderTemplateGuidance(this.resolvedTemplate));
+    }
+    if (this.styleGuide) {
+      parts.push(renderStyleGuideBlock(this.styleGuide));
+    }
+    return parts.join('\n\n');
   }
 
   async switchModel(newModel: string): Promise<void> {
@@ -344,6 +573,12 @@ export class ChatSession {
   }
 
   async stop(): Promise<void> {
+    // Flush before tearing down — never leave the project half-saved.
+    try {
+      await this.flush();
+    } catch (e) {
+      log.warn('flush before stop failed:', (e as Error).message);
+    }
     try {
       await this.session?.disconnect();
     } catch (e) {
@@ -371,6 +606,12 @@ export class ChatSession {
   async sendUserMessage(text: string): Promise<void> {
     if (!this.session) throw new Error('Session not started');
     this.push({ kind: 'user', id: this.id(), text });
+    // Persist the SDK session id on first user turn — we need it for resume.
+    if (this.project && !this.project.manifest.sessionId && this.session.sessionId) {
+      this.project.manifest = { ...this.project.manifest, sessionId: this.session.sessionId };
+      this.dirtyManifest = true;
+      this.scheduleSave();
+    }
     this.setBusy(true);
     try {
       await this.session.send({ prompt: text });
@@ -394,6 +635,58 @@ export class ChatSession {
     this.transcript = [];
     this.streamingId = null;
     this.emit();
+  }
+
+  /** Force-flush any pending autosave writes. Used by `/save` and `stop()`. */
+  async flush(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.flushPromise) await this.flushPromise;
+    this.flushPromise = this.doFlush();
+    try {
+      await this.flushPromise;
+    } finally {
+      this.flushPromise = null;
+    }
+  }
+
+  private scheduleSave(): void {
+    if (this.ephemeral || !this.project) return;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      // Fire-and-forget; errors get logged but don't crash the chat.
+      this.doFlush().catch((e) => log.warn('autosave failed:', (e as Error).message));
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  private async doFlush(): Promise<void> {
+    if (!this.project) return;
+    const name = this.project.manifest.name;
+
+    if (this.dirtyBrief && this.brief) {
+      await saveBrief(name, this.brief);
+      this.dirtyBrief = false;
+    }
+    for (const id of this.dirtySlides) {
+      const code = this.slideCode.get(id);
+      if (code) await saveSlideCode(name, id, code);
+    }
+    this.dirtySlides.clear();
+    for (const id of this.slideCodeDeletions) {
+      await deleteSlideCode(name, id);
+    }
+    this.slideCodeDeletions.clear();
+    if (this.dirtyUsage) {
+      await saveCritiqueUsage(name, this.critiqueUsage);
+      this.dirtyUsage = false;
+    }
+    if (this.dirtyManifest) {
+      await saveManifest(this.project.manifest);
+      this.dirtyManifest = false;
+    }
   }
 
   private attachEvents(session: CopilotSession): void {
@@ -433,6 +726,11 @@ export class ChatSession {
       const data = event.data as { newModel?: string; previousModel?: string; cause?: string };
       if (!data.newModel) return;
       this.activeModel = data.newModel;
+      if (this.project) {
+        this.project.manifest = { ...this.project.manifest, model: data.newModel };
+        this.dirtyManifest = true;
+        this.scheduleSave();
+      }
       if (data.cause === 'rate_limit_auto_switch' && data.previousModel) {
         this.addSystemMessage(
           `Copilot auto-switched model from ${data.previousModel} → ${data.newModel} (rate limit).`,
@@ -464,16 +762,48 @@ export class ChatSession {
         if (content && content.length > last.text.length) last.text = content;
         last.streaming = false;
       }
+      // Append the finalized entry to disk now (we couldn't while streaming).
+      this.persistFinalizedAssistant();
     } else if (content) {
-      this.push({ kind: 'assistant', id: this.id(), text: content, streaming: false });
+      const entry: TranscriptEntry = {
+        kind: 'assistant',
+        id: this.id(),
+        text: content,
+        streaming: false,
+      };
+      this.transcript.push(entry);
+      void this.persistTranscriptEntry(entry);
+      this.emit();
     }
     this.streamingId = null;
     this.emit();
   }
 
+  private persistFinalizedAssistant(): void {
+    // Persist the just-finalized assistant entry. We can't use the streaming
+    // ID anymore since we cleared it — grab the last assistant entry instead.
+    const last = this.transcript[this.transcript.length - 1];
+    if (last && last.kind === 'assistant' && !last.streaming) {
+      void this.persistTranscriptEntry(last);
+    }
+  }
+
   private push(entry: TranscriptEntry): void {
     this.transcript.push(entry);
+    // Streaming assistant entries are persisted on finalize, not on every delta.
+    if (!(entry.kind === 'assistant' && entry.streaming)) {
+      void this.persistTranscriptEntry(entry);
+    }
     this.emit();
+  }
+
+  private async persistTranscriptEntry(entry: TranscriptEntry): Promise<void> {
+    if (this.ephemeral || !this.project) return;
+    try {
+      await appendTranscriptEntry(this.project.manifest.name, entry);
+    } catch (e) {
+      log.warn('transcript append failed:', (e as Error).message);
+    }
   }
 
   private emit(): void {
@@ -491,4 +821,36 @@ function clampCritique(n: number): number {
   if (n < 0) return 0;
   if (n > MAX_CRITIQUE_PASSES) return MAX_CRITIQUE_PASSES;
   return Math.floor(n);
+}
+
+/** Format the active template's voice / copy / guidance for the system prompt. */
+function renderTemplateGuidance(template: ResolvedTemplate): string {
+  const lines: string[] = [
+    `## Active template: ${template.name}`,
+    '',
+    'A named template is in effect for this deck. Honour its theme (colours, fonts, tone) and any guidance below.',
+  ];
+  if (template.brand) lines.push(`Brand: ${template.brand}.`);
+  if (template.description) lines.push(`Description: ${template.description}`);
+  if (template.assets?.logo) {
+    lines.push(
+      '',
+      `Logo available at \`theme.assets.logo\` (absolute path: ${template.assets.logo}). Place via slide.addImage({ path: theme.assets.logo, ... }).`,
+    );
+  }
+  if (template.assets?.wordmark) {
+    lines.push(
+      `Wordmark available at \`theme.assets.wordmark\` (absolute path: ${template.assets.wordmark}).`,
+    );
+  }
+  if (template.voiceHints) {
+    lines.push('', '### Voice hints', template.voiceHints);
+  }
+  if (template.copyRules) {
+    lines.push('', '### Copy rules (binding)', template.copyRules);
+  }
+  if (template.guidance) {
+    lines.push('', '### Style guidance', template.guidance);
+  }
+  return lines.join('\n');
 }

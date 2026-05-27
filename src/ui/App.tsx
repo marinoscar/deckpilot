@@ -1,5 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import { Box, Text, useApp, useInput } from 'ink';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -7,7 +6,9 @@ import type { ChatSession, TranscriptEntry } from '../chat/session.js';
 import { HELP_TEXT, parseSlash } from '../chat/slash.js';
 import { summarizeBrief } from '../deck/brief.js';
 import { renderDeck } from '../render/renderer.js';
-import { summarizeTemplate } from '../template/profile.js';
+import { listTemplates } from '../store/templates.js';
+import { summarizeTemplate as summarizeTemplateProfile } from '../template/profile.js';
+import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
@@ -22,10 +23,22 @@ export const App: React.FC<Props> = ({ session }) => {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [model, setModel] = useState<string>(session.getModel());
+  const [projectName, setProjectName] = useState<string | null>(session.getProjectName());
+  const [templateName, setTemplateName] = useState<string | null>(
+    session.getActiveTemplateName() ?? null,
+  );
   const lastCtrlC = useRef<number>(0);
 
   useEffect(() => session.subscribe(setEntries), [session]);
   useEffect(() => session.onModelChange(setModel), [session]);
+  useEffect(
+    () =>
+      session.onProjectChange((m) => {
+        setProjectName(m?.name ?? null);
+        setTemplateName(m?.templateName ?? session.getActiveTemplateName() ?? null);
+      }),
+    [session],
+  );
   useEffect(
     () =>
       session.onBusyChange((busy) => {
@@ -81,13 +94,13 @@ export const App: React.FC<Props> = ({ session }) => {
       case 'clear':
         session.clear();
         session.addSystemMessage(
-          'Transcript cleared. (Deck preserved — use /new to also reset the deck.)',
+          'Transcript cleared on screen. (The deck is preserved in ~/.deckpilot/projects/.)',
         );
         return;
       case 'new':
         session.clear();
         session.addSystemMessage(
-          'Transcript cleared. Next propose_deck_brief will replace the current deck.',
+          'Transcript cleared. The next propose_deck_brief will replace the current deck in this project.',
         );
         return;
       case 'render': {
@@ -111,53 +124,97 @@ export const App: React.FC<Props> = ({ session }) => {
         return;
       }
       case 'save': {
-        const brief = session.getBrief();
-        if (!brief) {
-          session.addSystemMessage(
-            'No deck yet. Use /save only after the agent has proposed and built one.',
-          );
-          return;
-        }
-        const out = slash.outputPath ?? session.defaultOutputPath();
-        session.addSystemMessage(`Saving deck + sources → ${out} …`);
         try {
-          const abs = await renderDeck(brief, session.getAllSlideCode(), out, {
-            template: session.getTemplate() ?? undefined,
-          });
-          const base = abs.replace(/\.pptx$/i, '');
-          const briefPath = `${base}.brief.json`;
-          await mkdir(dirname(briefPath), { recursive: true });
-          await writeFile(briefPath, JSON.stringify(brief, null, 2));
-          const slidePaths: string[] = [];
-          for (const slide of brief.slides) {
-            const code = session.getSlideCode(slide.id);
-            if (!code) continue;
-            const sp = `${base}.${slide.id}.slide.ts`;
-            await writeFile(sp, code);
-            slidePaths.push(sp);
+          if (slash.projectName) {
+            await session.renameCurrentProject(slash.projectName);
+            session.addSystemMessage(`Renamed project → ${slash.projectName} and flushed.`);
+          } else {
+            await session.flush();
+            const proj = session.getProjectName();
+            session.addSystemMessage(
+              proj ? `Flushed project "${proj}" to disk.` : 'No active project to save.',
+            );
           }
-          session.addSystemMessage(
-            `Wrote ${abs}\n     ${briefPath}\n     ${slidePaths.length} slide source files`,
-          );
         } catch (e) {
           session.addSystemMessage(`save failed: ${(e as Error).message}`);
         }
         return;
       }
-      case 'template': {
-        if (!slash.path) {
-          const cur = session.getTemplate();
+      case 'project': {
+        if (!slash.arg) {
+          const manifest = session.getProjectManifest();
+          if (!manifest) {
+            session.addSystemMessage('No active project.');
+          } else {
+            session.addSystemMessage(
+              `Project "${manifest.name}"  (updated ${manifest.updatedAt})  template: ${manifest.templateName ?? '(none)'}`,
+            );
+          }
+          return;
+        }
+        try {
+          await session.renameCurrentProject(slash.arg);
+          session.addSystemMessage(`Renamed project → ${slash.arg}.`);
+        } catch (e) {
+          session.addSystemMessage(`Rename failed: ${(e as Error).message}`);
+        }
+        return;
+      }
+      case 'templates': {
+        const list = await listTemplates();
+        if (list.length === 0) {
           session.addSystemMessage(
-            cur ? summarizeTemplate(cur) : 'No template loaded. Try /template ./brand.pptx',
+            'No named templates yet. Create one with: deckpilot template create <name> [--from <pptx>].',
           );
           return;
         }
-        session.addSystemMessage(`Loading template ${slash.path} …`);
-        try {
-          const profile = await session.loadTemplate(slash.path);
-          session.addSystemMessage(summarizeTemplate(profile));
-        } catch (e) {
-          session.addSystemMessage(`Template load failed: ${(e as Error).message}`);
+        session.addSystemMessage(
+          ['Saved templates:', ...list.map((e) => `  ${summarizeTemplateSpec(e.spec)}`)].join('\n'),
+        );
+        return;
+      }
+      case 'template': {
+        if (!slash.arg) {
+          const named = session.getResolvedTemplate();
+          const oneShot = session.getTemplate();
+          if (named) {
+            session.addSystemMessage(`Active template: ${summarizeTemplateSpec(named)}`);
+          } else if (oneShot) {
+            session.addSystemMessage(
+              `Active one-shot template (no save): ${summarizeTemplateProfile(oneShot)}`,
+            );
+          } else {
+            session.addSystemMessage(
+              'No template applied. Use /template <name> or /template <path-to-pptx>.',
+            );
+          }
+          return;
+        }
+        if (slash.arg === 'none') {
+          session.clearTemplate();
+          session.addSystemMessage('Cleared the active template.');
+          return;
+        }
+        // Disambiguate: named template (kebab, exists) vs one-shot .pptx path.
+        const arg = slash.arg;
+        if (/^[a-z0-9-]+$/.test(arg) && !existsSync(arg)) {
+          try {
+            const resolved = await session.useNamedTemplate(arg);
+            session.addSystemMessage(
+              `Template "${arg}" applied: ${summarizeTemplateSpec(resolved)}`,
+            );
+          } catch (e) {
+            session.addSystemMessage(`Could not apply template "${arg}": ${(e as Error).message}`);
+          }
+        } else {
+          try {
+            const profile = await session.loadTemplate(arg);
+            session.addSystemMessage(
+              `One-shot template inherited from ${profile.sourcePath}: ${summarizeTemplateProfile(profile)}`,
+            );
+          } catch (e) {
+            session.addSystemMessage(`Template load failed: ${(e as Error).message}`);
+          }
         }
         return;
       }
@@ -288,7 +345,7 @@ export const App: React.FC<Props> = ({ session }) => {
         ) : (
           <Prompt disabled={false} onSubmit={handleSubmit} />
         )}
-        <StatusBar status={status} model={model} />
+        <StatusBar status={status} model={model} project={projectName} template={templateName} />
       </Box>
     </Box>
   );

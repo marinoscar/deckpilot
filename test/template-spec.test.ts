@@ -1,20 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  blankTemplate,
-  TemplateSpecSchema,
-  summarizeTemplate,
-} from '../src/template/spec.js';
-import {
-  saveTemplate,
-  loadTemplate,
-  listTemplates,
-  deleteTemplate,
-  TemplateNotFoundError,
   TemplateExistsError,
+  TemplateNotFoundError,
+  deleteTemplate,
+  listTemplates,
+  loadTemplate,
+  saveTemplate,
 } from '../src/store/templates.js';
+import { TemplateSpecSchema, blankTemplate, summarizeTemplate } from '../src/template/spec.js';
 
 describe('TemplateSpecSchema', () => {
   it('accepts a minimal spec with palette + fonts', () => {
