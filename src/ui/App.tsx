@@ -1,17 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { Box, Text, useApp, useInput } from 'ink';
+import type React from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChatSession, TranscriptEntry } from '../chat/session.js';
-import { parseSlash, HELP_TEXT } from '../chat/slash.js';
-import { Transcript } from './Transcript.js';
+import { HELP_TEXT, parseSlash } from '../chat/slash.js';
+import { summarizeBrief } from '../deck/brief.js';
+import { renderDeck } from '../render/renderer.js';
+import { summarizeTemplate } from '../template/profile.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
-import { renderPlan } from '../render/renderer.js';
-import { summarizePlan } from '../deck/revise.js';
-import { summarizeTemplate } from '../template/profile.js';
-import { listPresets } from '../deck/presets.js';
-import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { Transcript } from './Transcript.js';
 
 type Status = 'idle' | 'streaming' | 'cancelled' | 'error';
 
@@ -26,16 +26,11 @@ export const App: React.FC<Props> = ({ session }) => {
 
   useEffect(() => session.subscribe(setEntries), [session]);
   useEffect(() => session.onModelChange(setModel), [session]);
-  // Drive status from the session's busy flag — `session.send()` returns as
-  // soon as the message is queued, so the only authoritative signal that the
-  // agent has finished is the SDK's `session.idle` event (mapped to busy=false).
   useEffect(
     () =>
       session.onBusyChange((busy) => {
         setStatus((prev) => {
           if (busy) return 'streaming';
-          // Don't clobber 'error' on idle — let the user see the error until
-          // they send another message.
           if (prev === 'error') return 'error';
           return 'idle';
         });
@@ -70,7 +65,6 @@ export const App: React.FC<Props> = ({ session }) => {
       return;
     }
     try {
-      // Status transitions are driven by session.onBusyChange.
       await session.sendUserMessage(text);
     } catch (e) {
       setStatus('error');
@@ -78,10 +72,7 @@ export const App: React.FC<Props> = ({ session }) => {
     }
   }
 
-  async function handleSlash(
-    slash: ReturnType<typeof parseSlash>,
-    raw: string,
-  ): Promise<void> {
+  async function handleSlash(slash: ReturnType<typeof parseSlash>, raw: string): Promise<void> {
     if (!slash) return;
     switch (slash.kind) {
       case 'help':
@@ -89,27 +80,28 @@ export const App: React.FC<Props> = ({ session }) => {
         return;
       case 'clear':
         session.clear();
-        session.addSystemMessage('Transcript cleared. (Deck plan preserved — use /new to also reset the deck.)');
+        session.addSystemMessage(
+          'Transcript cleared. (Deck preserved — use /new to also reset the deck.)',
+        );
         return;
       case 'new':
         session.clear();
-        // Force a fresh plan slot by setting plan via setPlan is wrong (it
-        // requires a SlidePlan). For a true reset we just clear history;
-        // the next propose_outline replaces everything anyway.
-        session.addSystemMessage('Transcript cleared. Next propose_outline will replace the current deck.');
+        session.addSystemMessage(
+          'Transcript cleared. Next propose_deck_brief will replace the current deck.',
+        );
         return;
       case 'render': {
-        const plan = session.getPlan();
-        if (!plan) {
+        const brief = session.getBrief();
+        if (!brief) {
           session.addSystemMessage(
-            'No deck plan yet. Ask the agent first (e.g. "make me a 6-slide intro to vector databases for a CTO audience").',
+            'No deck yet. Ask the agent first (e.g. "make me a 6-slide intro to vector databases for a CTO audience").',
           );
           return;
         }
         const out = slash.outputPath ?? session.defaultOutputPath();
-        session.addSystemMessage(`Rendering ${plan.slides.length}-slide deck → ${out} …`);
+        session.addSystemMessage(`Rendering ${brief.slides.length}-slide deck → ${out} …`);
         try {
-          const abs = await renderPlan(plan, out, {
+          const abs = await renderDeck(brief, session.getAllSlideCode(), out, {
             template: session.getTemplate() ?? undefined,
           });
           session.addSystemMessage(`Wrote ${abs}`);
@@ -119,21 +111,34 @@ export const App: React.FC<Props> = ({ session }) => {
         return;
       }
       case 'save': {
-        const plan = session.getPlan();
-        if (!plan) {
-          session.addSystemMessage('No deck plan yet. Use /render only after the agent has proposed one.');
+        const brief = session.getBrief();
+        if (!brief) {
+          session.addSystemMessage(
+            'No deck yet. Use /save only after the agent has proposed and built one.',
+          );
           return;
         }
         const out = slash.outputPath ?? session.defaultOutputPath();
-        session.addSystemMessage(`Saving deck + plan.json → ${out} …`);
+        session.addSystemMessage(`Saving deck + sources → ${out} …`);
         try {
-          const abs = await renderPlan(plan, out, {
+          const abs = await renderDeck(brief, session.getAllSlideCode(), out, {
             template: session.getTemplate() ?? undefined,
           });
-          const jsonPath = resolve(dirname(abs), `${abs.replace(/\.pptx$/i, '')}.plan.json`);
-          await mkdir(dirname(jsonPath), { recursive: true });
-          await writeFile(jsonPath, JSON.stringify(plan, null, 2));
-          session.addSystemMessage(`Wrote ${abs}\n     and ${jsonPath}`);
+          const base = abs.replace(/\.pptx$/i, '');
+          const briefPath = `${base}.brief.json`;
+          await mkdir(dirname(briefPath), { recursive: true });
+          await writeFile(briefPath, JSON.stringify(brief, null, 2));
+          const slidePaths: string[] = [];
+          for (const slide of brief.slides) {
+            const code = session.getSlideCode(slide.id);
+            if (!code) continue;
+            const sp = `${base}.${slide.id}.slide.ts`;
+            await writeFile(sp, code);
+            slidePaths.push(sp);
+          }
+          session.addSystemMessage(
+            `Wrote ${abs}\n     ${briefPath}\n     ${slidePaths.length} slide source files`,
+          );
         } catch (e) {
           session.addSystemMessage(`save failed: ${(e as Error).message}`);
         }
@@ -158,43 +163,41 @@ export const App: React.FC<Props> = ({ session }) => {
       }
       case 'load': {
         if (!slash.path) {
-          session.addSystemMessage('Usage: /load <path-to-plan.json>');
+          session.addSystemMessage('Usage: /load <path-to-brief.json>');
           return;
         }
-        session.addSystemMessage(`Loading plan ${slash.path} …`);
+        session.addSystemMessage(`Loading brief ${slash.path} …`);
         try {
-          const plan = await session.loadPlanFromFile(slash.path);
+          const brief = await session.loadBriefFromFile(slash.path);
           session.addSystemMessage(
-            `Loaded ${plan.slides.length}-slide plan "${plan.meta.title}". You can edit it via chat or render it with /render.`,
+            `Loaded ${brief.slides.length}-slide brief "${brief.meta.title}". Slide code (if saved alongside) is NOT auto-loaded — ask the agent to rewrite or hand-paste it.`,
           );
         } catch (e) {
-          session.addSystemMessage(`Plan load failed: ${(e as Error).message}`);
+          session.addSystemMessage(`Brief load failed: ${(e as Error).message}`);
         }
         return;
       }
       case 'outline': {
-        const plan = session.getPlan();
-        if (!plan) {
-          session.addSystemMessage('No deck plan yet.');
+        const brief = session.getBrief();
+        if (!brief) {
+          session.addSystemMessage('No deck yet.');
           return;
         }
-        session.addSystemMessage(summarizePlan(plan));
+        session.addSystemMessage(summarizeBrief(brief));
         return;
       }
       case 'show': {
-        const plan = session.getPlan();
-        if (!plan) {
-          session.addSystemMessage('No deck plan yet.');
+        const brief = session.getBrief();
+        if (!brief) {
+          session.addSystemMessage('No deck yet.');
           return;
         }
-        session.addSystemMessage(JSON.stringify(plan, null, 2));
+        session.addSystemMessage(JSON.stringify(brief, null, 2));
         return;
       }
       case 'undo': {
         const undone = session.undo();
-        session.addSystemMessage(
-          undone ? 'Reverted the last plan change.' : 'Nothing to undo.',
-        );
+        session.addSystemMessage(undone ? 'Reverted the last deck change.' : 'Nothing to undo.');
         return;
       }
       case 'model': {
@@ -230,28 +233,21 @@ export const App: React.FC<Props> = ({ session }) => {
           );
           return;
         }
-        // Reset usage for this slide so the LLM gets one more pass even if it
-        // had already exhausted the budget on it.
         session.resetCritiqueUsage(slash.slideId);
         session.addSystemMessage(
-          `Critique budget reset for "${slash.slideId}". Ask the agent to re-preview it (e.g. "preview slide ${slash.slideId} and refine if needed").`,
+          `Critique budget reset for "${slash.slideId}". Ask the agent to re-preview it.`,
         );
         return;
       }
       case 'critique-passes': {
         if (typeof slash.n !== 'number') {
-          session.addSystemMessage(`Critique passes per slide: ${session.getCritiquePasses()} (max 5).`);
+          session.addSystemMessage(
+            `Critique passes per slide: ${session.getCritiquePasses()} (max 5).`,
+          );
           return;
         }
         const next = session.setCritiquePasses(slash.n);
         session.addSystemMessage(`Critique passes per slide set to ${next}.`);
-        return;
-      }
-      case 'presets': {
-        const lines = listPresets().map((p) => `  • ${p.description}`);
-        session.addSystemMessage(
-          `Named DesignSystem presets (the agent can pick one via apply_design_preset):\n${lines.join('\n')}`,
-        );
         return;
       }
       case 'style-guide': {
@@ -272,9 +268,7 @@ export const App: React.FC<Props> = ({ session }) => {
         exit();
         return;
       case 'unknown':
-        session.addSystemMessage(
-          `Unknown slash command: ${raw}. Try /help for the list.`,
-        );
+        session.addSystemMessage(`Unknown slash command: ${raw}. Try /help for the list.`);
         return;
     }
   }

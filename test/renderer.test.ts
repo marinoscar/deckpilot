@@ -1,156 +1,94 @@
-import { describe, it, expect, afterAll } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import JSZip from 'jszip';
-import { renderPlan } from '../src/render/renderer.js';
-import { SlidePlanSchema, type SlidePlan } from '../src/deck/schema.js';
-import { applySlidePatch } from '../src/deck/revise.js';
+import { afterAll, describe, expect, it } from 'vitest';
+import { type DeckBrief, DeckBriefSchema } from '../src/deck/brief.js';
+import { renderDeck } from '../src/render/renderer.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'deckpilot-test-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/**
- * A representative v0.5 plan exercising all five composition kinds plus the
- * full design system surface. Used both by the renderer tests and the patch
- * tests below.
- */
-const FIXTURE_PLAN: SlidePlan = SlidePlanSchema.parse({
+const FIXTURE_BRIEF: DeckBrief = DeckBriefSchema.parse({
   meta: {
-    title: 'Knowledge Graphs for the Time-Constrained CTO',
-    subtitle: 'When to invest, what to skip, and what it really costs.',
+    title: 'Knowledge Graphs',
+    subtitle: 'A pragmatic guide',
     author: 'DeckPilot',
-    aspect: '16:9',
   },
-  design: {
+  theme: {
     accent: '1A2B5E',
     accentAlt: 'C8202E',
     tone: 'editorial',
-    useKickers: true,
-    useFooterBand: true,
-    cardStyle: 'side-bar',
+    aspect: '16:9',
   },
   slides: [
-    {
-      id: 'cover',
-      title: 'Knowledge Graphs',
-      subtitle: 'A 7-slide decision framework',
-      background: 'paper',
-      notes: 'Open warm — promise practical guidance.',
-    },
+    { id: 'cover', title: 'Knowledge Graphs', purpose: 'Cover slide.', notes: 'Open warm.' },
     {
       id: 'frame',
-      kicker: 'The Frame',
-      title: "It's a progression, not a choice",
-      body: {
-        kind: 'grid',
-        columns: 4,
-        items: [
-          { number: '01', title: 'DATA', body: 'Raw, fragmented rows', accent: 'primary' },
-          { number: '02', title: 'MEANING', body: 'Shared vocabulary', accent: 'primary' },
-          { number: '03', title: 'KNOWLEDGE', body: 'Connected entities', accent: 'alt' },
-          { number: '04', title: 'INTELLIGENCE', body: 'Autonomous reasoning', accent: 'alt' },
-        ],
-      },
-      notes: 'Frame the progression.',
+      title: 'A progression',
+      purpose: 'Show four stages.',
+      notes: 'Walk the stages.',
     },
-    {
-      id: 'plain',
-      kicker: 'In Plain English',
-      title: 'Two simple ideas',
-      body: {
-        kind: 'grid',
-        columns: 2,
-        items: [
-          {
-            kicker: 'Semantic Model',
-            title: 'A shared dictionary.',
-            body: 'Everyone agrees on the words and what they mean.',
-            cta: 'lets you → search',
-            glyph: 'table',
-            accent: 'primary',
-          },
-          {
-            kicker: 'Ontology',
-            title: 'A map of meaning.',
-            body: 'Captures how things relate.',
-            cta: 'lets you → discover & reason',
-            glyph: 'network',
-            accent: 'alt',
-          },
-        ],
-      },
-      notes: 'Compare side by side.',
-    },
-    {
-      id: 'workflow',
-      kicker: 'How it works',
-      title: 'From rows to reasoning',
-      body: {
-        kind: 'steps',
-        items: [
-          { number: '1', title: 'Model', description: 'Define shared vocabulary' },
-          { number: '2', title: 'Link', description: 'Connect entities' },
-          { number: '3', title: 'Reason', description: 'Run inference', accent: 'alt' },
-        ],
-      },
-      notes: 'Walk the steps.',
-    },
-    {
-      id: 'quote',
-      body: {
-        kind: 'quote',
-        text: "Buy the database. Build the retrieval logic. Own the embeddings.",
-        attribution: 'DeckPilot, on architectural rules of thumb',
-      },
-      notes: 'Land it, breathe, move on.',
-    },
-    {
-      id: 'takeaway',
-      body: {
-        kind: 'callout',
-        lead: 'Bottom line',
-        statement: 'Every enterprise needs semantic models. Some workloads also need an ontology.',
-      },
-      notes: 'The chapter takeaway.',
-    },
-    {
-      id: 'narrative',
-      kicker: 'A Worked Example',
-      title: 'Think of your music app',
-      subtitle: 'Same data underneath. Three very different experiences.',
-      body: {
-        kind: 'prose',
-        lead: 'Stages map cleanly onto how much meaning you choose to capture.',
-        bullets: [
-          { text: 'Just data: filename-level search', level: 0 },
-          { text: 'Semantic: artist + album + tempo, joined and tagged', level: 0 },
-          { text: 'Ontology: relationships, influences, mood vectors', level: 0 },
-        ],
-      },
-      notes: 'Make it concrete.',
-    },
+    { id: 'missing', title: 'No code yet', purpose: 'Demonstrate the placeholder path.' },
   ],
 });
 
-describe('renderPlan (v0.5)', () => {
-  it('writes a non-empty .pptx with one slide part per plan slide', async () => {
+const FIXTURE_CODE = new Map<string, string>([
+  [
+    'cover',
+    `function render(slide, theme, helpers) {
+      slide.background = { color: theme.accent };
+      slide.addText('Knowledge Graphs', {
+        x: 0.6, y: 2.0, w: 12.0, h: 2.0,
+        fontFace: theme.fontHeading, fontSize: 84, bold: true,
+        color: helpers.contrastInk(theme.accent),
+      });
+    }`,
+  ],
+  [
+    'frame',
+    `function render(slide, theme, helpers) {
+      slide.background = { color: theme.paper };
+      slide.addText('A progression, not a choice', {
+        x: 0.6, y: 0.6, w: 12.0, h: 1.0,
+        fontFace: theme.fontHeading, fontSize: 44, bold: true,
+        color: theme.accent,
+      });
+      const cardW = (12.0 - 0.45 * 3) / 4;
+      ['DATA', 'MEANING', 'KNOWLEDGE', 'INTELLIGENCE'].forEach((label, i) => {
+        const x = 0.6 + i * (cardW + 0.45);
+        slide.addShape('roundRect', {
+          x, y: 2.4, w: cardW, h: 3.6,
+          fill: { color: helpers.lighten(theme.accent, 0.9) },
+          line: { color: theme.accent, width: 0 },
+          rectRadius: 0.06,
+        });
+        slide.addText(label, {
+          x, y: 3.8, w: cardW, h: 0.8,
+          fontFace: theme.fontHeading, fontSize: 22, bold: true,
+          color: theme.accent, align: 'center',
+        });
+      });
+    }`,
+  ],
+]);
+
+describe('renderDeck (code-gen)', () => {
+  it('writes a non-empty .pptx with one slide part per brief slide', async () => {
     const out = join(dir, 'kg.pptx');
-    const abs = await renderPlan(FIXTURE_PLAN, out);
+    const abs = await renderDeck(FIXTURE_BRIEF, FIXTURE_CODE, out);
     expect(abs).toBe(out);
     expect(existsSync(out)).toBe(true);
     expect(statSync(out).size).toBeGreaterThan(15_000);
 
     const zip = await JSZip.loadAsync(readFileSync(out));
-    const slidePaths = Object.keys(zip.files).filter((p) =>
-      /^ppt\/slides\/slide\d+\.xml$/.test(p),
-    );
-    expect(slidePaths.length).toBe(FIXTURE_PLAN.slides.length);
+    const slidePaths = Object.keys(zip.files).filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p));
+    expect(slidePaths.length).toBe(FIXTURE_BRIEF.slides.length);
   });
 
-  it('emits speaker notes for slides with notes populated', async () => {
+  it('emits speaker notes for slides with notes populated in the brief', async () => {
     const out = join(dir, 'notes.pptx');
-    await renderPlan(FIXTURE_PLAN, out);
+    await renderDeck(FIXTURE_BRIEF, FIXTURE_CODE, out);
     const zip = await JSZip.loadAsync(readFileSync(out));
     const notesSlides = Object.keys(zip.files).filter((p) =>
       /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(p),
@@ -158,46 +96,27 @@ describe('renderPlan (v0.5)', () => {
     expect(notesSlides.length).toBeGreaterThan(0);
   });
 
-  it('embeds the slide title text in slide-2 (the framework slide)', async () => {
+  it('embeds the title text from a slide whose code calls addText', async () => {
     const out = join(dir, 'titles.pptx');
-    await renderPlan(FIXTURE_PLAN, out);
+    await renderDeck(FIXTURE_BRIEF, FIXTURE_CODE, out);
     const zip = await JSZip.loadAsync(readFileSync(out));
     const slide2 = await zip.file('ppt/slides/slide2.xml')!.async('string');
-    // OOXML escapes apostrophes, so check the unambiguous tail.
-    expect(slide2).toContain('progression, not a choice');
+    expect(slide2).toMatch(/progression, not a choice/);
   });
 
-  it('renders cards (rounded-rect shapes) on grid slides', async () => {
+  it('renders a placeholder slide when no code is supplied for an id', async () => {
+    const out = join(dir, 'placeholder.pptx');
+    await renderDeck(FIXTURE_BRIEF, FIXTURE_CODE, out);
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    const slide3 = await zip.file('ppt/slides/slide3.xml')!.async('string');
+    expect(slide3).toMatch(/slide code not yet written/);
+  });
+
+  it('renders rounded-rect shapes when code calls addShape("roundRect", ...)', async () => {
     const out = join(dir, 'cards.pptx');
-    await renderPlan(FIXTURE_PLAN, out);
+    await renderDeck(FIXTURE_BRIEF, FIXTURE_CODE, out);
     const zip = await JSZip.loadAsync(readFileSync(out));
-    // Slide 2 is the 4-column grid. It should contain `roundRect` preset shape entries.
     const slide2 = await zip.file('ppt/slides/slide2.xml')!.async('string');
-    // pptxgenjs encodes shape preset as `prstGeom prst="roundRect"` (or similar)
     expect(slide2).toMatch(/roundRect/);
-  });
-});
-
-describe('applySlidePatch (v0.5)', () => {
-  it('patches a single slide field', () => {
-    const { plan, slide } = applySlidePatch(FIXTURE_PLAN, 'cover', {
-      title: 'Knowledge Graphs — A Pragmatic Guide',
-    });
-    expect(slide.title).toBe('Knowledge Graphs — A Pragmatic Guide');
-    expect(plan.slides.find((s) => s.id === 'cover')?.title).toContain('Pragmatic Guide');
-  });
-
-  it('replaces a body composition atomically', () => {
-    const { slide } = applySlidePatch(FIXTURE_PLAN, 'narrative', {
-      body: {
-        kind: 'callout',
-        statement: 'Music apps live or die by their relationship graph.',
-      },
-    });
-    expect(slide.body?.kind).toBe('callout');
-  });
-
-  it('errors on unknown slide id', () => {
-    expect(() => applySlidePatch(FIXTURE_PLAN, 'nope', { title: 'x' })).toThrow(/No slide/);
   });
 });

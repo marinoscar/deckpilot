@@ -5,7 +5,7 @@ import type { Hook } from '@oclif/core';
  * `deckpilot` → `deckpilot chat`.
  * Recognised top-level flags like --version / --help are left alone.
  */
-const hook: Hook<'init'> = async function (opts) {
+const hook: Hook<'init'> = async (opts) => {
   const argv = opts.argv ?? [];
   if (opts.id) return;
   if (argv.length === 0) {

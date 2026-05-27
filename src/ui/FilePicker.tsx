@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
-import { filterFiles, humanSize, scanWorkspaceFiles, type FileEntry } from '../util/files.js';
+import type React from 'react';
+import { useEffect, useState } from 'react';
+import { type FileEntry, filterFiles, humanSize, scanWorkspaceFiles } from '../util/files.js';
 
 type Props = {
   query: string;
@@ -75,9 +76,16 @@ export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve })
   const visible = filtered.slice(start, start + MAX_VISIBLE);
 
   return (
-    <Box flexDirection="column" marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1}>
+    <Box
+      flexDirection="column"
+      marginBottom={1}
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+    >
       <Text color="cyan" bold>
-        @ {filtered.length} file{filtered.length === 1 ? '' : 's'} (↑/↓ select · Enter insert · Esc cancel)
+        @ {filtered.length} file{filtered.length === 1 ? '' : 's'} (↑/↓ select · Enter insert · Esc
+        cancel)
       </Text>
       {visible.map((f, i) => {
         const realIndex = start + i;
@@ -94,9 +102,7 @@ export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve })
         );
       })}
       {filtered.length > visible.length ? (
-        <Text dimColor>
-          … {filtered.length - visible.length} more (type to filter)
-        </Text>
+        <Text dimColor>… {filtered.length - visible.length} more (type to filter)</Text>
       ) : null}
     </Box>
   );

@@ -3,10 +3,7 @@ import { BaseCommand } from '../cli/base-command.js';
 export default class Version extends BaseCommand {
   static override description = 'Print the DeckPilot version.';
 
-  static override examples = [
-    '<%= config.bin %> version',
-    '<%= config.bin %> --version',
-  ];
+  static override examples = ['<%= config.bin %> version', '<%= config.bin %> --version'];
 
   static override aliases = ['ver'];
 

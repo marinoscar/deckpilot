@@ -1,7 +1,7 @@
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, ModelInfo, Tool } from '@github/copilot-sdk';
-import { resolveGitHubToken } from './auth.js';
 import { log } from '../util/logger.js';
+import { resolveGitHubToken } from './auth.js';
 
 export type CreateClientOptions = {
   gitHubToken?: string;

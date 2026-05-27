@@ -1,10 +1,10 @@
-import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import JSZip from 'jszip';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { inspectTemplate } from '../src/template/inspect.js';
-import { filterFiles, type FileEntry } from '../src/util/files.js';
+import { type FileEntry, filterFiles } from '../src/util/files.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'deckpilot-tmpl-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -99,7 +99,13 @@ describe('inspectTemplate', () => {
 describe('filterFiles', () => {
   const sample: FileEntry[] = [
     { path: 'brand.pptx', name: 'brand.pptx', kind: 'pptx', mtime: 1, size: 0 },
-    { path: 'archive/old-deck.plan.json', name: 'old-deck.plan.json', kind: 'plan.json', mtime: 1, size: 0 },
+    {
+      path: 'archive/old-deck.plan.json',
+      name: 'old-deck.plan.json',
+      kind: 'plan.json',
+      mtime: 1,
+      size: 0,
+    },
     { path: 'q3-sales.pptx', name: 'q3-sales.pptx', kind: 'pptx', mtime: 1, size: 0 },
   ];
 

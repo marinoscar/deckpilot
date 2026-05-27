@@ -1,9 +1,10 @@
 /**
- * Slide preview pipeline. Renders a SlidePlan to a temp .pptx, then shells
- * out to LibreOffice headless (`soffice --headless --convert-to png`) to
- * rasterise each slide to a PNG. Returns the path to the requested slide's
- * PNG; the result is cached by a content-hash of the plan so a critique pass
- * over N slides only renders the deck once.
+ * Slide preview pipeline. Renders a DeckBrief + per-slide code to a temp
+ * .pptx, then shells out to LibreOffice headless (`soffice --convert-to`
+ * pdf, then `pdftoppm`) to rasterise each slide to a PNG. Returns the path
+ * to the requested slide's PNG; the result is cached by a content-hash of
+ * the brief + code map so a critique pass over N slides only renders the
+ * deck once per state.
  *
  * This is the eyes the LLM uses to see its own work — feed the PNG back via
  * the SDK's `binaryResultsForLlm` mechanism.
@@ -11,15 +12,15 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { renderPlan } from './renderer.js';
-import type { SlidePlan } from '../deck/schema.js';
+import type { DeckBrief } from '../deck/brief.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { log } from '../util/logger.js';
+import { type SlideCodeMap, renderDeck } from './renderer.js';
 
 const exec = promisify(execFile);
 
@@ -57,19 +58,18 @@ export async function isPreviewAvailable(): Promise<boolean> {
 }
 
 export type PreviewOptions = {
-  /** Working directory for preview cache. Defaults to <os.tmpdir>/deckpilot-previews. */
   cacheDir?: string;
-  /** Template to pass through to the renderer (theme inheritance). */
   template?: TemplateProfile;
 };
 
 /**
  * Render the given slide to a PNG and return the absolute path. Renders the
- * whole deck once into the cache, keyed by a hash of the plan; subsequent
- * calls within the same cache version return the cached PNG.
+ * whole deck once into the cache, keyed by a hash of the brief + code map;
+ * subsequent calls within the same cache version return the cached PNG.
  */
 export async function renderSlideToPng(
-  plan: SlidePlan,
+  brief: DeckBrief,
+  slideCode: SlideCodeMap,
   slideId: string,
   opts: PreviewOptions = {},
 ): Promise<string> {
@@ -79,63 +79,29 @@ export async function renderSlideToPng(
       'LibreOffice is not installed. The visual critique loop needs `soffice` / `libreoffice` on $PATH. On Ubuntu/WSL: sudo apt install libreoffice. Skip this step or set --critique-passes 0 to bypass.',
     );
   }
-  const slideIdx = plan.slides.findIndex((s) => s.id === slideId);
+  const slideIdx = brief.slides.findIndex((s) => s.id === slideId);
   if (slideIdx < 0) {
     throw new Error(`No slide with id "${slideId}".`);
   }
 
   const cacheRoot = opts.cacheDir ?? join(tmpdir(), 'deckpilot-previews');
-  const planHash = hashPlan(plan);
-  const versionDir = join(cacheRoot, planHash);
+  const stateHash = hashState(brief, slideCode);
+  const versionDir = join(cacheRoot, stateHash);
   const pngName = `slide-${String(slideIdx + 1).padStart(3, '0')}.png`;
   const expectedPng = join(versionDir, pngName);
 
-  // Cache hit
   if (existsSync(expectedPng)) {
     return expectedPng;
   }
 
   await mkdir(versionDir, { recursive: true });
 
-  // 1) Render the deck to a temp .pptx inside the cache dir
   const tmpPptx = join(versionDir, 'deck.pptx');
-  await renderPlan(plan, tmpPptx, opts.template ? { template: opts.template } : {});
+  await renderDeck(brief, slideCode, tmpPptx, opts.template ? { template: opts.template } : {});
 
-  // 2) Convert with LibreOffice headless — produces one PNG per slide.
-  //    LibreOffice's PNG export is a "first slide only" thing by default, so
-  //    we use `--convert-to pdf` first then rasterise. The simplest robust
-  //    path: convert to PNG with the `:impress_png_Export:...` filter, which
-  //    does emit per-slide images named `<base>-N.png`. Falling back to PDF
-  //    is messier; we go directly to PNG.
-  try {
-    await exec(
-      soffice,
-      [
-        '--headless',
-        '--norestore',
-        '--nofirststartwizard',
-        '--convert-to',
-        'png',
-        '--outdir',
-        versionDir,
-        tmpPptx,
-      ],
-      { timeout: 60_000, maxBuffer: 1024 * 1024 * 50 },
-    );
-  } catch (e) {
-    throw new Error(`LibreOffice failed to render slides: ${(e as Error).message}`);
-  }
-
-  // LibreOffice's PNG export only emits the first slide as `deck.png`. To get
-  // per-slide images we go via PDF and rasterise. We use LibreOffice itself
-  // to produce a PDF, then `pdftoppm` to slice into PNGs. `pdftoppm` is part
-  // of `poppler-utils` which is almost always co-installed with LibreOffice
-  // on Linux. If it's missing we surface a clear error.
-  const slidesDirEntries = await readdir(versionDir);
-  const alreadyHavePerSlide = slidesDirEntries.some((f) => /^slide-\d{3}\.png$/.test(f));
-  if (!alreadyHavePerSlide) {
-    await rasteriseViaPdf(soffice, tmpPptx, versionDir);
-  }
+  // soffice --convert-to png emits only the first slide by default. We always
+  // go via PDF + pdftoppm to get one PNG per slide.
+  await rasteriseViaPdf(soffice, tmpPptx, versionDir);
 
   if (!existsSync(expectedPng)) {
     throw new Error(
@@ -146,7 +112,6 @@ export async function renderSlideToPng(
 }
 
 async function rasteriseViaPdf(soffice: string, pptxPath: string, outDir: string): Promise<void> {
-  // Step A: pptx → pdf
   try {
     await exec(
       soffice,
@@ -171,7 +136,6 @@ async function rasteriseViaPdf(soffice: string, pptxPath: string, outDir: string
     throw new Error(`Expected ${pdfPath} after LibreOffice PDF conversion`);
   }
 
-  // Step B: pdf → png series via pdftoppm (poppler)
   try {
     await exec('which', ['pdftoppm']);
   } catch {
@@ -182,17 +146,16 @@ async function rasteriseViaPdf(soffice: string, pptxPath: string, outDir: string
 
   const slidePrefix = join(outDir, 'slide');
   try {
-    await exec(
-      'pdftoppm',
-      ['-png', '-r', '150', pdfPath, slidePrefix],
-      { timeout: 60_000, maxBuffer: 1024 * 1024 * 50 },
-    );
+    await exec('pdftoppm', ['-png', '-r', '150', pdfPath, slidePrefix], {
+      timeout: 60_000,
+      maxBuffer: 1024 * 1024 * 50,
+    });
   } catch (e) {
     throw new Error(`pdftoppm failed: ${(e as Error).message}`);
   }
 
   // pdftoppm names files slide-1.png, slide-2.png … with no zero-pad. Rename
-  // to slide-001.png style so the cache key is stable across deck sizes.
+  // to slide-001.png so the cache key is stable across deck sizes.
   const entries = await readdir(outDir);
   for (const f of entries) {
     const m = f.match(/^slide-(\d+)\.png$/);
@@ -210,10 +173,18 @@ async function rasteriseViaPdf(soffice: string, pptxPath: string, outDir: string
   }
 }
 
-/** Stable content hash of a plan — used as the preview cache key. */
-function hashPlan(plan: SlidePlan): string {
+/** Stable content hash of (brief + slide-code map). */
+function hashState(brief: DeckBrief, slideCode: SlideCodeMap): string {
   const h = createHash('sha1');
-  h.update(JSON.stringify(plan));
+  h.update(JSON.stringify(brief));
+  // Stable iteration: sort by slide id.
+  const entries = [...slideCode.entries()].sort(([a], [b]) => a.localeCompare(b));
+  for (const [id, code] of entries) {
+    h.update('');
+    h.update(id);
+    h.update('');
+    h.update(code);
+  }
   return h.digest('hex').slice(0, 16);
 }
 
@@ -228,7 +199,6 @@ export async function clearPreviewCache(cacheDir?: string): Promise<void> {
   }
 }
 
-/** Resolve `path` and read its bytes — small helper used by the SDK tool. */
 export async function readPng(path: string): Promise<Buffer> {
   return readFile(resolve(path));
 }

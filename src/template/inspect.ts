@@ -1,9 +1,20 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import JSZip from 'jszip';
 import { XMLParser } from 'fast-xml-parser';
-import { DEFAULT_THEME } from '../deck/theme.js';
+import JSZip from 'jszip';
 import type { TemplateProfile } from './profile.js';
+
+/**
+ * Fallback colours/fonts when a template has no explicit theme part. Kept
+ * conservative so the inherited "design system" reads as a generic editorial
+ * baseline rather than something that screams "we couldn't find your brand".
+ */
+const FALLBACK = {
+  accent: '0F62FE',
+  accentDark: '002D9C',
+  fontHeading: 'Inter Tight',
+  fontBody: 'Inter',
+} as const;
 
 const EMU_PER_INCH = 914400;
 
@@ -19,7 +30,7 @@ const xmlParser = new XMLParser({
  * slideMasters + slideLayouts (layout names).
  *
  * Failure modes are non-fatal where possible: a missing field falls back to
- * DEFAULT_THEME or a reasonable inference. A genuinely unparseable file
+ * FALLBACK or a reasonable inference. A genuinely unparseable file
  * (not a zip, not a pptx, corrupt XML) throws with a clear message.
  */
 export async function inspectTemplate(path: string): Promise<TemplateProfile> {
@@ -76,8 +87,8 @@ async function readThemeAndFonts(
   const themeXml = await zip.file('ppt/theme/theme1.xml')?.async('string');
   if (!themeXml) {
     return {
-      colors: { accent: DEFAULT_THEME.accent, accentDark: DEFAULT_THEME.accentDark },
-      fonts: { heading: DEFAULT_THEME.fontHeading, body: DEFAULT_THEME.fontBody },
+      colors: { accent: FALLBACK.accent, accentDark: FALLBACK.accentDark },
+      fonts: { heading: FALLBACK.fontHeading, body: FALLBACK.fontBody },
     };
   }
   const parsed = xmlParser.parse(themeXml) as Record<string, unknown>;
@@ -93,10 +104,10 @@ async function readThemeAndFonts(
 }
 
 function extractColors(clr?: Record<string, unknown>): TemplateProfile['colors'] {
-  if (!clr) return { accent: DEFAULT_THEME.accent };
+  if (!clr) return { accent: FALLBACK.accent };
   const accent = colorFromNode(clr['a:accent1']);
   return {
-    accent: accent ?? DEFAULT_THEME.accent,
+    accent: accent ?? FALLBACK.accent,
     accentDark: colorFromNode(clr['a:accent2']) ?? undefined,
     ink: colorFromNode(clr['a:dk1']) ?? colorFromNode(clr['a:dk2']),
     muted: colorFromNode(clr['a:accent3']),
@@ -117,7 +128,7 @@ function colorFromNode(node: unknown): string | undefined {
 }
 
 function extractFonts(font?: Record<string, unknown>): TemplateProfile['fonts'] {
-  const def = { heading: DEFAULT_THEME.fontHeading, body: DEFAULT_THEME.fontBody };
+  const def = { heading: FALLBACK.fontHeading, body: FALLBACK.fontBody };
   if (!font) return def;
   const major = font['a:majorFont'] as Record<string, unknown> | undefined;
   const minor = font['a:minorFont'] as Record<string, unknown> | undefined;

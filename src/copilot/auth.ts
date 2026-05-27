@@ -1,4 +1,9 @@
-export type TokenSource = 'explicit' | 'env:COPILOT_GITHUB_TOKEN' | 'env:GH_TOKEN' | 'env:GITHUB_TOKEN' | 'sdk-keychain';
+export type TokenSource =
+  | 'explicit'
+  | 'env:COPILOT_GITHUB_TOKEN'
+  | 'env:GH_TOKEN'
+  | 'env:GITHUB_TOKEN'
+  | 'sdk-keychain';
 
 export type TokenResolution = {
   token?: string;

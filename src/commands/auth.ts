@@ -1,7 +1,7 @@
 import { Args } from '@oclif/core';
 import { BaseCommand } from '../cli/base-command.js';
-import { createClient } from '../copilot/client.js';
 import { describeTokenSource, resolveGitHubToken } from '../copilot/auth.js';
+import { createClient } from '../copilot/client.js';
 
 type SubCmd = 'login' | 'logout' | 'status';
 
@@ -61,8 +61,6 @@ export default class Auth extends BaseCommand {
   }
 
   private async logout(): Promise<void> {
-    this.log(
-      'Run `npx -p @github/copilot copilot auth logout` to clear the Copilot CLI keychain.',
-    );
+    this.log('Run `npx -p @github/copilot copilot auth logout` to clear the Copilot CLI keychain.');
   }
 }

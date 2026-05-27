@@ -14,7 +14,6 @@ export type SlashCommand =
   | { kind: 'critique'; slideId?: string }
   | { kind: 'critique-passes'; n?: number }
   | { kind: 'style-guide' }
-  | { kind: 'presets' }
   | { kind: 'quit' }
   | { kind: 'unknown'; raw: string };
 
@@ -37,7 +36,6 @@ const KNOWN: Record<string, SlashCommand['kind']> = {
   critique: 'critique',
   'critique-passes': 'critique-passes',
   'style-guide': 'style-guide',
-  presets: 'presets',
   quit: 'quit',
   exit: 'quit',
 };
@@ -78,18 +76,17 @@ export function parseSlash(input: string): SlashParseResult {
 export const HELP_TEXT = `
 Slash commands:
   /help, /?         Show this help
-  /outline          Compact outline of the current deck (titles + bullet counts)
-  /show             Full plan as JSON
-  /render [path]    Render the current plan to .pptx (default: ./<title>.pptx)
-  /save [path]      Render + save a plan.json next to it (for later re-editing)
-  /load <path>      Load a previously-saved .plan.json as the working plan
+  /outline          Compact outline of the current brief (titles + purposes)
+  /show             Full DeckBrief as JSON
+  /render [path]    Render the current deck to .pptx (default: ./<title>.pptx)
+  /save [path]      Render + save brief.json + per-slide .ts sources next to it
+  /load <path>      Load a previously-saved .brief.json as the working brief
   /template <path>  Inherit theme + fonts from an existing .pptx (style only)
   /template         Show the currently-loaded template
   /critique <id>    Force the LLM to re-preview a specific slide (resets its budget)
   /critique-passes <n>  Set how many preview passes per slide (0 disables, max 5)
-  /presets          List the available named DesignSystem presets
   /style-guide      Show the active DECKPILOT.md (or note that none was found)
-  /undo             Roll back the most recent plan change
+  /undo             Roll back the most recent deck change
   /clear            Clear the transcript (keep the deck)
   /new              Reset everything (transcript and deck)
   /model            Show the current LLM model

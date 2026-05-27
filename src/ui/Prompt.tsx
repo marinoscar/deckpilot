@@ -1,5 +1,6 @@
-import React, { useState, useRef, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
+import type React from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { FileEntry } from '../util/files.js';
 import { FilePicker } from './FilePicker.js';
 

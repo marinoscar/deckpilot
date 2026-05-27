@@ -1,18 +1,20 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { CopilotSession, ModelInfo } from '@github/copilot-sdk';
+import {
+  type ProjectStyleGuide,
+  loadStyleGuide,
+  renderStyleGuideBlock,
+} from '../config/project.js';
 import type { DeckPilotClient } from '../copilot/client.js';
 import { UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
-import { buildDeckTools, type DeckToolContext } from '../tools/index.js';
-import { SYSTEM_PROMPT } from './system-prompt.js';
-import { applySlidePatch } from '../deck/revise.js';
-import type { DesignSystem, Slide, SlidePatch, SlidePlan } from '../deck/schema.js';
-import { SlidePlanSchema } from '../deck/schema.js';
+import { type DeckBrief, DeckBriefSchema } from '../deck/brief.js';
+import { inspectTemplate } from '../template/inspect.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { summarizeTemplate } from '../template/profile.js';
-import { inspectTemplate } from '../template/inspect.js';
-import { loadStyleGuide, renderStyleGuideBlock, type ProjectStyleGuide } from '../config/project.js';
+import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
-import { resolve } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { SYSTEM_PROMPT } from './system-prompt.js';
 
 export type TranscriptEntry =
   | { kind: 'user'; id: string; text: string }
@@ -23,22 +25,22 @@ export type TranscriptEntry =
 export type SessionListener = (entries: TranscriptEntry[]) => void;
 export type ModelListener = (model: string) => void;
 export type BusyListener = (busy: boolean) => void;
-export type PlanListener = (plan: SlidePlan | null) => void;
+export type BriefListener = (brief: DeckBrief | null) => void;
 export type TemplateListener = (template: TemplateProfile | null) => void;
 
 export type ChatSessionOptions = {
   model?: string;
-  /** Path to a `.pptx` whose theme/fonts should be inherited at startup. */
   templatePath?: string;
-  /** How many render_slide_preview calls the LLM is allowed per slide. 0 disables. */
   critiquePassesPerSlide?: number;
 };
 
-/** Hard ceiling on critique passes. The model can't grind forever. */
 const MAX_CRITIQUE_PASSES = 5;
-
-/** Maximum SlidePlan revisions we keep around for `/undo`. */
 const UNDO_DEPTH = 20;
+
+type BriefSnapshot = {
+  brief: DeckBrief | null;
+  slideCode: Map<string, string>;
+};
 
 export class ChatSession {
   private transcript: TranscriptEntry[] = [];
@@ -49,36 +51,24 @@ export class ChatSession {
   private session: CopilotSession | null = null;
   private streamingId: string | null = null;
   private nextId = 1;
-  /** Model the user requested at startup (via `--model`). `undefined` means "use the Copilot CLI's configured default". */
   private requestedModel: string | undefined;
-  /** Model the SDK has actually reported as active. Empty until the first session.model_change event arrives. */
   private activeModel: string | null = null;
 
-  /** Working SlidePlan. Mutated by tools and slash commands. */
-  private plan: SlidePlan | null = null;
-  /** Stack of prior plan snapshots for `/undo`. Each propose_outline / revise_slide pushes the previous plan. */
-  private planHistory: (SlidePlan | null)[] = [];
-  private planListeners = new Set<PlanListener>();
+  /** Working DeckBrief. Mutated by tools and slash commands. */
+  private brief: DeckBrief | null = null;
+  /** Per-slide LLM-generated rendering code, keyed by slide id. */
+  private slideCode = new Map<string, string>();
+  /** Snapshot stack for `/undo`. Captures both brief and code map. */
+  private undoStack: BriefSnapshot[] = [];
+  private briefListeners = new Set<BriefListener>();
 
-  /** Active template, inherited theme + fonts during rendering. */
   private template: TemplateProfile | null = null;
   private templateListeners = new Set<TemplateListener>();
-  /** Where to load a template from on first start, if the user passed one. */
   private requestedTemplatePath: string | undefined;
 
-  /**
-   * The deck-wide design system. Set by the LLM via `set_design_system` or
-   * implicitly through `propose_outline`'s `design` field. Available to slash
-   * commands and the renderer; kept null until the LLM commits one.
-   */
-  private designSystem: DesignSystem | null = null;
-
-  /** Per-slide critique pass budget. Clamped to [0, MAX_CRITIQUE_PASSES]. */
   private critiquePasses = 3;
-  /** Per-slide count of preview-render calls already consumed. */
   private critiqueUsage = new Map<string, number>();
 
-  /** Project-level style guide loaded from DECKPILOT.md, if any. */
   private styleGuide: ProjectStyleGuide | null = null;
 
   constructor(
@@ -129,42 +119,63 @@ export class ChatSession {
 
   // ---- deck state ----
 
-  getPlan(): SlidePlan | null {
-    return this.plan;
+  getBrief(): DeckBrief | null {
+    return this.brief;
   }
 
-  onPlanChange(fn: PlanListener): () => void {
-    this.planListeners.add(fn);
-    fn(this.plan);
+  onBriefChange(fn: BriefListener): () => void {
+    this.briefListeners.add(fn);
+    fn(this.brief);
     return () => {
-      this.planListeners.delete(fn);
+      this.briefListeners.delete(fn);
     };
   }
 
-  setPlan(plan: SlidePlan): void {
-    this.planHistory.push(this.plan);
-    if (this.planHistory.length > UNDO_DEPTH) this.planHistory.shift();
-    this.plan = plan;
-    for (const fn of this.planListeners) fn(plan);
+  setBrief(brief: DeckBrief): void {
+    this.pushSnapshot();
+    // Replacing the brief drops slide code whose ids no longer exist.
+    const validIds = new Set(brief.slides.map((s) => s.id));
+    for (const id of [...this.slideCode.keys()]) {
+      if (!validIds.has(id)) this.slideCode.delete(id);
+    }
+    this.brief = brief;
+    this.emitBrief();
   }
 
-  patchSlide(slideId: string, patch: SlidePatch): Slide {
-    if (!this.plan) throw new Error('No working plan to patch.');
-    const { plan, slide } = applySlidePatch(this.plan, slideId, patch);
-    this.planHistory.push(this.plan);
-    if (this.planHistory.length > UNDO_DEPTH) this.planHistory.shift();
-    this.plan = plan;
-    for (const fn of this.planListeners) fn(plan);
-    return slide;
+  getSlideCode(id: string): string | null {
+    return this.slideCode.get(id) ?? null;
+  }
+
+  setSlideCode(id: string, code: string): void {
+    this.pushSnapshot();
+    this.slideCode.set(id, code);
+    this.emitBrief();
+  }
+
+  getAllSlideCode(): ReadonlyMap<string, string> {
+    return this.slideCode;
+  }
+
+  private pushSnapshot(): void {
+    this.undoStack.push({
+      brief: this.brief,
+      slideCode: new Map(this.slideCode),
+    });
+    if (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift();
   }
 
   /** Roll back one revision. Returns true if anything was undone. */
   undo(): boolean {
-    if (this.planHistory.length === 0) return false;
-    const prev = this.planHistory.pop()!;
-    this.plan = prev;
-    for (const fn of this.planListeners) fn(prev);
+    const snap = this.undoStack.pop();
+    if (!snap) return false;
+    this.brief = snap.brief;
+    this.slideCode = new Map(snap.slideCode);
+    this.emitBrief();
     return true;
+  }
+
+  private emitBrief(): void {
+    for (const fn of this.briefListeners) fn(this.brief);
   }
 
   // ---- template state ----
@@ -195,10 +206,12 @@ export class ChatSession {
   }
 
   /**
-   * Load a previously-saved DeckPilot `.plan.json` as the working plan. The
-   * file MUST be a SlidePlan that validates against the current schema.
+   * Load a previously-saved DeckPilot `.brief.json` as the working brief. The
+   * file MUST validate against the current schema; slide code is NOT loaded
+   * by this entry point — call /load-slides separately if you have the .ts
+   * files saved alongside.
    */
-  async loadPlanFromFile(path: string): Promise<SlidePlan> {
+  async loadBriefFromFile(path: string): Promise<DeckBrief> {
     const raw = await readFile(resolve(process.cwd(), path), 'utf8');
     let json: unknown;
     try {
@@ -206,20 +219,20 @@ export class ChatSession {
     } catch (e) {
       throw new Error(`${path} is not valid JSON: ${(e as Error).message}`);
     }
-    const parsed = SlidePlanSchema.safeParse(json);
+    const parsed = DeckBriefSchema.safeParse(json);
     if (!parsed.success) {
       throw new Error(
-        `SlidePlan in ${path} failed validation:\n${parsed.error.issues
+        `DeckBrief in ${path} failed validation:\n${parsed.error.issues
           .map((i) => `  ${i.path.join('.')}: ${i.message}`)
           .join('\n')}`,
       );
     }
-    this.setPlan(parsed.data);
+    this.setBrief(parsed.data);
     return parsed.data;
   }
 
   defaultOutputPath(): string {
-    const title = this.plan?.meta.title ?? 'deckpilot-output';
+    const title = this.brief?.meta.title ?? 'deckpilot-output';
     const slug =
       title
         .toLowerCase()
@@ -227,16 +240,6 @@ export class ChatSession {
         .replace(/^-+|-+$/g, '')
         .slice(0, 60) || 'deckpilot-output';
     return resolve(process.cwd(), `${slug}.pptx`);
-  }
-
-  // ---- design system state ----
-
-  getDesignSystem(): DesignSystem | null {
-    return this.designSystem;
-  }
-
-  setDesignSystem(ds: DesignSystem): void {
-    this.designSystem = ds;
   }
 
   // ---- critique state ----
@@ -247,12 +250,10 @@ export class ChatSession {
 
   setCritiquePasses(n: number): number {
     this.critiquePasses = clampCritique(n);
-    // Reset per-slide tallies whenever the budget changes — fairer mid-session.
     this.critiqueUsage.clear();
     return this.critiquePasses;
   }
 
-  /** Consume one critique pass for a slide. Returns whether the call was allowed and how many remain. */
   consumeCritiquePass(slideId: string): { allowed: boolean; remaining: number } {
     if (this.critiquePasses <= 0) return { allowed: false, remaining: 0 };
     const used = this.critiqueUsage.get(slideId) ?? 0;
@@ -261,7 +262,6 @@ export class ChatSession {
     return { allowed: true, remaining: this.critiquePasses - (used + 1) };
   }
 
-  /** Reset critique usage for a single slide. Used by /critique to force a manual pass. */
   resetCritiqueUsage(slideId: string): void {
     this.critiqueUsage.delete(slideId);
   }
@@ -279,14 +279,14 @@ export class ChatSession {
 
   private toolContext(): DeckToolContext {
     return {
-      getPlan: () => this.plan,
-      setPlan: (p) => this.setPlan(p),
-      patchSlide: (id, patch) => this.patchSlide(id, patch),
+      getBrief: () => this.brief,
+      setBrief: (b) => this.setBrief(b),
+      getSlideCode: (id) => this.getSlideCode(id),
+      setSlideCode: (id, code) => this.setSlideCode(id, code),
+      getAllSlideCode: () => this.slideCode,
       defaultOutputPath: () => this.defaultOutputPath(),
       getTemplate: () => this.template,
       loadTemplate: (p) => this.loadTemplate(p),
-      getDesignSystem: () => this.designSystem,
-      setDesignSystem: (ds) => this.setDesignSystem(ds),
       critiquePassesPerSlide: () => this.critiquePasses,
       consumeCritiquePass: (id) => this.consumeCritiquePass(id),
     };
@@ -296,8 +296,6 @@ export class ChatSession {
 
   async start(): Promise<void> {
     await this.dp.start();
-    // Load DECKPILOT.md from cwd/ancestors before opening the session so its
-    // rules can be folded into the system prompt as a binding style guide.
     try {
       this.styleGuide = await loadStyleGuide();
     } catch (e) {
@@ -333,12 +331,6 @@ export class ChatSession {
     }
   }
 
-  /**
-   * Switch the active model. Uses the SDK's `session.setModel()` which takes
-   * effect on the next message AND preserves conversation history — no
-   * disconnect/recreate required. The actual model id displayed in the UI
-   * updates when the SDK emits `session.model_change`.
-   */
   async switchModel(newModel: string): Promise<void> {
     if (!this.session) throw new Error('Session not started');
     const trimmed = newModel.trim();
@@ -349,8 +341,6 @@ export class ChatSession {
     }
     try {
       await this.session.setModel(trimmed);
-      // The model_change event will update this.activeModel and fire
-      // modelListeners; we just confirm the request landed.
       this.addSystemMessage(`Requested model → ${trimmed}. Takes effect on the next message.`);
     } catch (e) {
       this.addSystemMessage(`Could not switch to ${trimmed}: ${(e as Error).message}`);
@@ -389,9 +379,6 @@ export class ChatSession {
     try {
       await this.session.send({ prompt: text });
     } catch (e) {
-      // `send()` returns as soon as the message is queued, but if even that
-      // queueing fails we have to clear `busy` ourselves — no `session.idle`
-      // event will fire to do it for us.
       this.setBusy(false);
       throw e;
     }

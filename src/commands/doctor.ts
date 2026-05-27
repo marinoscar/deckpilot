@@ -1,10 +1,10 @@
-import { existsSync, accessSync, constants } from 'node:fs';
-import { join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { constants, accessSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { BaseCommand } from '../cli/base-command.js';
-import { createClient } from '../copilot/client.js';
 import { describeTokenSource, resolveGitHubToken } from '../copilot/auth.js';
+import { createClient } from '../copilot/client.js';
 
 const exec = promisify(execFile);
 

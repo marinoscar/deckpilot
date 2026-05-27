@@ -2,41 +2,39 @@ import { defineTool } from '@github/copilot-sdk';
 import type { Tool } from '@github/copilot-sdk';
 import { z } from 'zod';
 
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import pptxgenjsImport from 'pptxgenjs';
+import { type DeckBrief, DeckBriefSchema, formatZodError, summarizeBrief } from '../deck/brief.js';
+import type { Theme } from '../deck/theme.js';
 import {
-  DesignSystemSchema,
-  SlidePlanSchema,
-  SlidePatchSchema,
-  SlideSchema,
-  formatZodError,
-  type DesignSystem,
-  type Slide,
-  type SlidePlan,
-} from '../deck/schema.js';
-import { PRESETS, PRESET_NAMES, describePreset, type PresetName } from '../deck/presets.js';
-import { applySlidePatch, summarizePlan, summarizeSlide } from '../deck/revise.js';
-import { renderPlan } from '../render/renderer.js';
-import { PreviewUnavailableError, isPreviewAvailable, readPng, renderSlideToPng } from '../render/preview.js';
+  PreviewUnavailableError,
+  isPreviewAvailable,
+  readPng,
+  renderSlideToPng,
+} from '../render/preview.js';
+import { SlideCodeError, renderDeck } from '../render/renderer.js';
+import { runSlideCode } from '../render/sandbox.js';
 import type { TemplateProfile } from '../template/profile.js';
 import { summarizeTemplate } from '../template/profile.js';
-import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs has no exported constructor type
+const PptxGenJS = pptxgenjsImport as unknown as new () => any;
 
 /**
  * Surface the ChatSession exposes to deck-mutating tools. Kept narrow so we
  * don't accidentally hand the LLM the keys to the whole UI.
  */
 export type DeckToolContext = {
-  getPlan: () => SlidePlan | null;
-  setPlan: (plan: SlidePlan) => void;
-  patchSlide: (slideId: string, patch: z.infer<typeof SlidePatchSchema>) => Slide;
+  getBrief: () => DeckBrief | null;
+  setBrief: (brief: DeckBrief) => void;
+  getSlideCode: (slideId: string) => string | null;
+  setSlideCode: (slideId: string, code: string) => void;
+  getAllSlideCode: () => ReadonlyMap<string, string>;
   defaultOutputPath: () => string;
   getTemplate: () => TemplateProfile | null;
   loadTemplate: (path: string) => Promise<TemplateProfile>;
-  getDesignSystem: () => DesignSystem | null;
-  setDesignSystem: (ds: DesignSystem) => void;
-  /** Hard cap on render_slide_preview calls per slide. 0 disables the tool entirely. */
+  /** Hard cap on critique/preview calls per slide. 0 disables visual critique. */
   critiquePassesPerSlide: () => number;
-  /** Tracks how many render_slide_preview calls a given slide has already cost. */
   consumeCritiquePass: (slideId: string) => { remaining: number; allowed: boolean };
 };
 
@@ -50,7 +48,9 @@ const RenderArgs = z.object({
     .min(1)
     .max(512)
     .optional()
-    .describe('Path (relative to cwd or absolute) to write the .pptx to. Defaults to ./<deck-title>.pptx.'),
+    .describe(
+      'Path (relative to cwd or absolute) to write the .pptx to. Defaults to ./<deck-title>.pptx.',
+    ),
 });
 
 const SaveArgs = z.object({
@@ -60,277 +60,216 @@ const SaveArgs = z.object({
     .max(512)
     .optional()
     .describe('Where to write the .pptx. Defaults to ./<deck-title>.pptx.'),
-  includePlanJson: z
+  includeSources: z
     .boolean()
     .default(true)
-    .describe('When true, also writes the validated SlidePlan as <output>.plan.json for later re-editing.'),
+    .describe(
+      'When true, also writes <output>.brief.json and one <output>.<slideId>.slide.ts file per slide so the deck can be edited / re-rendered later.',
+    ),
 });
 
-const ReviseArgs = z.object({
-  slideId: z.string().min(1).describe('The id of the slide to patch (see propose_outline output).'),
-  patch: SlidePatchSchema.describe(
-    'Partial slide fields to overwrite. The whole `body` is replaced atomically — patches cannot deep-merge into a composition.',
-  ),
+const WriteSlideCodeArgs = z.object({
+  slideId: z
+    .string()
+    .min(1)
+    .max(32)
+    .describe('The id of the slide to author (must exist in the brief).'),
+  code: z
+    .string()
+    .min(1)
+    .max(20_000)
+    .describe(
+      'JavaScript/TypeScript that draws this slide. May be either (a) a function declaration `function render(slide, theme, helpers) { ... }`, or (b) bare statements that call slide methods directly. See the system prompt for the API surface.',
+    ),
 });
 
 export function buildDeckTools(ctx: DeckToolContext): Tool[] {
-  // `defineTool` returns Tool<TArgs> with the specific arg type inferred from
-  // the zod schema; the SDK's createSession expects Tool<unknown>[] (its
-  // generic is invariant). Cast each tool to `Tool` (= Tool<unknown>) at the
-  // boundary.
+  // `defineTool` returns Tool<TArgs>; the SDK's createSession expects
+  // Tool<unknown>[] (its generic is invariant). Cast each tool to `Tool` at
+  // the boundary.
   const tools: Tool[] = [
-    defineTool('apply_design_preset', {
+    defineTool('propose_deck_brief', {
       description: [
-        'Quickest way to lock in a design system: pick one of the named presets and (optionally) override a few fields. Prefer this over set_design_system for ordinary decks.',
-        'Available presets:',
-        ...PRESET_NAMES.map((n) => `  - ${describePreset(n)}`),
-        'The overrides field accepts any subset of DesignSystem fields and is merged on top of the preset. Use overrides sparingly — the presets are tuned.',
-      ].join('\n'),
-      parameters: z.object({
-        preset: z.enum(PRESET_NAMES as [PresetName, ...PresetName[]]).describe('Name of a preset to clone.'),
-        overrides: DesignSystemSchema.partial()
-          .optional()
-          .describe('Optional per-field overrides applied on top of the chosen preset.'),
-      }),
+        'PHASE 1. Author or replace the working DeckBrief. This is the outline the user approves before any slide code is written.',
+        'A brief has: meta (title, subtitle?, author?, audience?), theme (palette + fonts + tone hint + aspect), and slides (each with id, title, purpose, optional notes).',
+        "Choose the theme yourself — DeckPilot does NOT use presets. Invent a coherent palette (accent + complementary accentAlt, ink, muted, paper) and font pair that fits the user's ask. If a DECKPILOT.md style guide was loaded, honour it.",
+        'After this tool succeeds, present the outline to the user as readable prose and wait for approval. Do not start writing slide code until the user says go/build/proceed.',
+      ].join(' '),
+      parameters: DeckBriefSchema,
       skipPermission: true,
-      handler: async (args): Promise<ToolResult<{ summary: string }>> => {
-        const base = PRESETS[args.preset as PresetName];
-        const merged = { ...base, ...(args.overrides ?? {}) };
-        const parsed = DesignSystemSchema.safeParse(merged);
+      handler: async (brief): Promise<ToolResult<{ summary: string }>> => {
+        const parsed = DeckBriefSchema.safeParse(brief);
         if (!parsed.success) {
           return {
             ok: false,
-            error: 'Preset + overrides failed validation:\n' + formatZodError(parsed.error),
+            error: `DeckBrief failed validation:\n${formatZodError(parsed.error)}`,
+            hint: 'Adjust the offending fields and resend.',
           };
         }
-        ctx.setDesignSystem(parsed.data);
-        const d = parsed.data;
+        ctx.setBrief(parsed.data);
         return {
           ok: true,
-          message: `Applied preset "${args.preset}". Now call propose_outline.`,
-          data: {
-            summary: `${args.preset} · accent #${d.accent}, accentAlt #${d.accentAlt}, fonts ${d.fontHeading}/${d.fontBody}, cardStyle=${d.cardStyle}, kickers=${d.useKickers}`,
-          },
+          message: `Brief accepted (${parsed.data.slides.length} slides). Present it to the user and wait for approval before writing slide code.`,
+          data: { summary: summarizeBrief(parsed.data) },
         };
       },
     }) as Tool,
 
-    defineTool('set_design_system', {
+    defineTool('write_slide_code', {
       description: [
-        'Lock in a fully-custom design system. Prefer apply_design_preset when one of the five presets is close enough — this tool is for genuinely bespoke palettes / tones the presets don\'t cover.',
-        'Sets ONCE per deck, BEFORE propose_outline. All slides are composed against this guideline.',
-        'If the user gave no style hints, prefer apply_design_preset("editorial") instead of inventing.',
+        'PHASE 2. Write (or replace) the rendering code for ONE slide and immediately render a PNG of the result for visual critique.',
+        'The code receives three globals: `slide` (the pptxgenjs slide proxy), `theme` (your accepted DeckBrief theme), and `helpers` (lighten/darken/contrastInk/hex). See the system prompt for the full API surface.',
+        'On the FIRST preview of any slide you MUST find at least one specific improvement — assume the first draft is never perfect. Call write_slide_code again with a revised function.',
+        'Hard cap: critique-passes per slide (default 3, max 5). Each call to this tool counts as one pass.',
+        'When the slide looks genuinely great, stop and move to the next slide.',
       ].join(' '),
-      parameters: DesignSystemSchema,
+      parameters: WriteSlideCodeArgs,
       skipPermission: true,
-      handler: async (ds): Promise<ToolResult<{ summary: string }>> => {
-        const parsed = DesignSystemSchema.safeParse(ds);
-        if (!parsed.success) {
+      handler: async (args, _invocation) => {
+        const brief = ctx.getBrief();
+        if (!brief) {
           return {
-            ok: false,
-            error: 'DesignSystem failed validation:\n' + formatZodError(parsed.error),
+            textResultForLlm:
+              'No working brief yet. Call propose_deck_brief first and get user approval.',
+            resultType: 'failure' as const,
+            error: 'no_brief',
           };
         }
-        ctx.setDesignSystem(parsed.data);
-        const d = parsed.data;
-        const summary = `tone=${d.tone}, accent=#${d.accent}, accentAlt=#${d.accentAlt}, fonts=${d.fontHeading}/${d.fontBody}, cardStyle=${d.cardStyle}, kickers=${d.useKickers}`;
-        return {
-          ok: true,
-          message: 'Design system locked. Now call propose_outline.',
-          data: { summary },
-        };
-      },
-    }) as Tool,
+        if (!brief.slides.some((s) => s.id === args.slideId)) {
+          return {
+            textResultForLlm: `No slide with id "${args.slideId}" in the brief. Valid ids: ${brief.slides.map((s) => s.id).join(', ')}`,
+            resultType: 'failure' as const,
+            error: 'unknown_slide_id',
+          };
+        }
 
-    defineTool('propose_outline', {
-      description: [
-        'Author or replace the working SlidePlan. Call AFTER set_design_system.',
-        'Each slide is composed of: optional kicker (small all-caps signpost), title, subtitle,',
-        'and a body composition. Body composition kinds:',
-        '  prose   — kicker + title + lead paragraph + bullets (for ordinary narrative slides)',
-        '  grid    — 2/3/4-column card layout (use for comparisons, progressions, KPI grids,',
-        '            stage breakdowns; mix-and-match kickers, numbers, glyphs, and CTA pills per card)',
-        '  steps   — horizontal row of numbered badges with titles + descriptions (for process flows)',
-        '  callout — one oversized takeaway sentence (use for "bottom-line" slides)',
-        '  quote   — pull quote with attribution',
-        'Vary composition kinds across the deck — never use prose for every slide. ALWAYS populate',
-        'speaker notes. Slide ids should be short and stable (e.g. "s1", "intro", "team-snapshot").',
-      ].join(' '),
-      parameters: SlidePlanSchema,
-      skipPermission: true,
-      handler: async (plan): Promise<ToolResult<{ summary: string }>> => {
-        const parsed = SlidePlanSchema.safeParse(plan);
-        if (!parsed.success) {
-          return {
-            ok: false,
-            error: 'SlidePlan failed validation:\n' + formatZodError(parsed.error),
-            hint: 'Adjust the offending fields and resend propose_outline with the corrected plan.',
-          };
-        }
-        ctx.setPlan(parsed.data);
-        // Keep the session-level design system in sync with what's in the plan.
-        ctx.setDesignSystem(parsed.data.design);
-        return {
-          ok: true,
-          message: `Outline accepted (${parsed.data.slides.length} slides). Refine with revise_slide; write with render_deck or save_deck.`,
-          data: { summary: summarizePlan(parsed.data) },
-        };
-      },
-    }) as Tool,
-
-    defineTool('revise_slide', {
-      description: [
-        'Patch a single slide in the working plan. Only include fields you want to change.',
-        'The body field is atomic — to change composition kind, send a complete new body object.',
-        'If you want to change the deck-wide design system, do NOT use this; call set_design_system.',
-      ].join(' '),
-      parameters: ReviseArgs,
-      skipPermission: true,
-      handler: async (args): Promise<ToolResult<{ slide: string }>> => {
-        if (!ctx.getPlan()) {
-          return {
-            ok: false,
-            error: 'No working plan yet.',
-            hint: 'Call propose_outline first.',
-          };
-        }
+        // Dry-run the code against a throwaway slide to surface syntax / API
+        // errors before we commit it to the session. This lets us reject bad
+        // code without polluting the working state.
         try {
-          const slide = ctx.patchSlide(args.slideId, args.patch);
+          const probe = new PptxGenJS();
+          probe.layout = brief.theme.aspect === '4:3' ? 'LAYOUT_STANDARD' : 'LAYOUT_WIDE';
+          const dummy = probe.addSlide();
+          runSlideCode(args.code, dummy, brief.theme, args.slideId);
+        } catch (e) {
+          const msg = e instanceof SlideCodeError ? e.message : (e as Error).message;
           return {
-            ok: true,
-            message: `Patched slide ${args.slideId}.`,
-            data: { slide: summarizeSlide(slide) },
+            textResultForLlm: `Slide code didn't execute cleanly — fix and resend.\n\n${msg}`,
+            resultType: 'failure' as const,
+            error: 'slide_code_error',
+          };
+        }
+
+        // Commit to the session before previewing — that way revising via
+        // another write_slide_code call always sees the latest state.
+        ctx.setSlideCode(args.slideId, args.code);
+
+        // Critique budget check — also gates whether we run the preview.
+        const passes = ctx.critiquePassesPerSlide();
+        if (passes <= 0) {
+          return {
+            textResultForLlm: `Slide code stored for "${args.slideId}". Visual critique is disabled (--critique-passes 0); skipping preview. Proceed to the next slide.`,
+            resultType: 'success' as const,
+          };
+        }
+        const allow = ctx.consumeCritiquePass(args.slideId);
+        if (!allow.allowed) {
+          return {
+            textResultForLlm: `Slide code stored for "${args.slideId}", but the per-slide critique budget (${passes} passes) is already exhausted — no fresh preview emitted. Accept the slide as it is or summarise concerns in chat for the user.`,
+            resultType: 'success' as const,
+          };
+        }
+
+        if (!(await isPreviewAvailable())) {
+          return {
+            textResultForLlm: `Slide code stored for "${args.slideId}". Visual preview unavailable (LibreOffice missing). Proceed without the PNG — tell the user, they can install with: sudo apt install libreoffice poppler-utils`,
+            resultType: 'success' as const,
+          };
+        }
+
+        try {
+          const pngPath = await renderSlideToPng(brief, ctx.getAllSlideCode(), args.slideId, {
+            template: ctx.getTemplate() ?? undefined,
+          });
+          const bytes = await readPng(pngPath);
+          const base64 = bytes.toString('base64');
+          const slideIdx = brief.slides.findIndex((s) => s.id === args.slideId);
+          const remaining = allow.remaining;
+          return {
+            textResultForLlm: `Slide ${slideIdx + 1} ("${args.slideId}") code stored and rendered to PNG (attached). ${remaining} critique pass${remaining === 1 ? '' : 'es'} remaining. Look at the image; on the FIRST pass for any slide, find at least one specific improvement and call write_slide_code again with revised code. Stop when the slide is genuinely great, not just acceptable.`,
+            binaryResultsForLlm: [
+              {
+                type: 'image' as const,
+                mimeType: 'image/png',
+                data: base64,
+                description: `Slide ${slideIdx + 1}: ${args.slideId}`,
+              },
+            ],
+            resultType: 'success' as const,
           };
         } catch (e) {
-          return {
-            ok: false,
-            error: (e as Error).message,
-            hint: 'Verify the slide id and that the patched fields are valid.',
-          };
-        }
-      },
-    }) as Tool,
-
-    defineTool('render_deck', {
-      description:
-        "Render the current SlidePlan to a .pptx on disk. Returns the absolute path. Call this when the user signals they're happy with the outline (or earlier if they ask for a draft).",
-      parameters: RenderArgs,
-      skipPermission: true,
-      handler: async (args): Promise<ToolResult<{ path: string; slides: number }>> => {
-        const plan = ctx.getPlan();
-        if (!plan) {
-          return {
-            ok: false,
-            error: 'No plan to render.',
-            hint: 'Call propose_outline first.',
-          };
-        }
-        const out = args.outputPath ?? ctx.defaultOutputPath();
-        try {
-          const abs = await renderPlan(plan, out, { template: ctx.getTemplate() ?? undefined });
-          return {
-            ok: true,
-            message: `Wrote ${plan.slides.length}-slide deck to ${abs}.`,
-            data: { path: abs, slides: plan.slides.length },
-          };
-        } catch (e) {
-          return { ok: false, error: `Render failed: ${(e as Error).message}` };
-        }
-      },
-    }) as Tool,
-
-    defineTool('save_deck', {
-      description:
-        'Render the current SlidePlan to .pptx AND (by default) save the plan.json next to it for later re-editing.',
-      parameters: SaveArgs,
-      skipPermission: true,
-      handler: async (args): Promise<ToolResult<{ pptx: string; planJson?: string }>> => {
-        const plan = ctx.getPlan();
-        if (!plan) {
-          return {
-            ok: false,
-            error: 'No plan to save.',
-            hint: 'Call propose_outline first.',
-          };
-        }
-        const out = args.outputPath ?? ctx.defaultOutputPath();
-        try {
-          const abs = await renderPlan(plan, out, { template: ctx.getTemplate() ?? undefined });
-          const data: { pptx: string; planJson?: string } = { pptx: abs };
-          if (args.includePlanJson) {
-            const jsonPath = resolve(
-              dirname(abs),
-              (abs.replace(/\.pptx$/i, '') || abs) + '.plan.json',
-            );
-            await mkdir(dirname(jsonPath), { recursive: true });
-            await writeFile(jsonPath, JSON.stringify(plan, null, 2));
-            data.planJson = jsonPath;
+          if (e instanceof PreviewUnavailableError) {
+            return {
+              textResultForLlm: `Slide code stored, but preview failed: ${e.message}`,
+              resultType: 'failure' as const,
+              error: 'preview_unavailable',
+            };
+          }
+          if (e instanceof SlideCodeError) {
+            return {
+              textResultForLlm: `Slide code stored but threw during real render: ${e.message}. Fix and resend.`,
+              resultType: 'failure' as const,
+              error: 'slide_code_error',
+            };
           }
           return {
-            ok: true,
-            message: `Saved deck to ${abs}${data.planJson ? ` (and plan to ${data.planJson})` : ''}.`,
-            data,
-          };
-        } catch (e) {
-          return { ok: false, error: `Save failed: ${(e as Error).message}` };
-        }
-      },
-    }) as Tool,
-
-    defineTool('inspect_template', {
-      description:
-        'Load a `.pptx` whose theme (accent colour, fonts) should be inherited by subsequent renders. The slides in the template file are NOT imported — only its visual style. Returns a one-paragraph summary of what was extracted so you can confirm or react to it.',
-      parameters: z.object({
-        path: z
-          .string()
-          .min(1)
-          .max(512)
-          .describe('Path (relative to cwd or absolute) to a .pptx file to use as a style template.'),
-      }),
-      skipPermission: true,
-      handler: async (args): Promise<ToolResult<{ summary: string }>> => {
-        try {
-          const profile = await ctx.loadTemplate(args.path);
-          return {
-            ok: true,
-            message: `Template loaded: ${profile.sourcePath}`,
-            data: { summary: summarizeTemplate(profile) },
-          };
-        } catch (e) {
-          return {
-            ok: false,
-            error: `Template load failed: ${(e as Error).message}`,
-            hint: 'Verify the path is a valid .pptx file.',
+            textResultForLlm: `Preview render failed: ${(e as Error).message}`,
+            resultType: 'failure' as const,
+            error: 'render_failed',
           };
         }
       },
     }) as Tool,
 
-    defineTool('render_slide_preview', {
+    defineTool('preview_slide', {
       description: [
-        'Render the current state of one slide to a PNG image attached to the tool result so YOU can see how it actually looks.',
-        'REQUIRED in Phase 2 (BUILD): preview every visually-substantive slide (grid / steps / callout / quote) at least once.',
-        'On the FIRST preview of any slide, you MUST find at least one specific improvement — assume the first draft is never perfect. Be critical, not approving.',
-        'Check: type hierarchy, column balance, text overflow, breathing room, dominant-vs-supporting colour, CTA pill consistency, comparable to a Claude.ai reference deck.',
-        'If anything is off, call revise_slide and re-preview. If the slide is genuinely good after revision, move on.',
-        'Hard cap: 5 passes per slide (default 3, configurable via --critique-passes). The text result tells you remaining count.',
-        'Use this tool again in Phase 3 (FINAL REVIEW) to check cross-slide consistency once every slide is built.',
+        'PHASE 3 (and rare ad-hoc Phase 2). Re-render a slide PNG without changing its code. Use this for the final cross-slide consistency review once every slide has been built.',
+        'Each call counts against the per-slide critique budget. If you want to revise the slide, call write_slide_code instead.',
       ].join(' '),
       parameters: z.object({
-        slideId: z
-          .string()
-          .min(1)
-          .max(32)
-          .describe('The id of the slide to preview. See propose_outline output.'),
+        slideId: z.string().min(1).max(32).describe('The id of the slide to preview.'),
       }),
       skipPermission: true,
       handler: async (args, _invocation) => {
-        // Budget check
+        const brief = ctx.getBrief();
+        if (!brief) {
+          return {
+            textResultForLlm: 'No working brief. Call propose_deck_brief first.',
+            resultType: 'failure' as const,
+            error: 'no_brief',
+          };
+        }
+        if (!brief.slides.some((s) => s.id === args.slideId)) {
+          return {
+            textResultForLlm: `No slide with id "${args.slideId}". Valid ids: ${brief.slides.map((s) => s.id).join(', ')}`,
+            resultType: 'failure' as const,
+            error: 'unknown_slide_id',
+          };
+        }
+        const code = ctx.getSlideCode(args.slideId);
+        if (!code) {
+          return {
+            textResultForLlm: `Slide "${args.slideId}" has no code yet. Write it with write_slide_code first.`,
+            resultType: 'failure' as const,
+            error: 'no_slide_code',
+          };
+        }
+
         const passes = ctx.critiquePassesPerSlide();
         if (passes <= 0) {
           return {
             textResultForLlm:
-              'Visual critique is disabled (--critique-passes 0). Skip preview and proceed with the current draft.',
+              'Visual critique is disabled (--critique-passes 0). Skip preview and proceed.',
             resultType: 'failure' as const,
             error: 'critique_disabled',
           };
@@ -338,40 +277,31 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         const allow = ctx.consumeCritiquePass(args.slideId);
         if (!allow.allowed) {
           return {
-            textResultForLlm: `Critique budget for slide "${args.slideId}" is exhausted (${passes} passes already consumed). Accept the slide as-is and move to the next one. If genuine issues remain, summarise them in chat for the user to weigh in.`,
+            textResultForLlm: `Critique budget for slide "${args.slideId}" is exhausted (${passes} passes). Accept the slide as-is and move on.`,
             resultType: 'failure' as const,
             error: 'budget_exhausted',
-          };
-        }
-
-        const plan = ctx.getPlan();
-        if (!plan) {
-          return {
-            textResultForLlm: 'No plan to preview. Call propose_outline first.',
-            resultType: 'failure' as const,
-            error: 'no_plan',
           };
         }
 
         if (!(await isPreviewAvailable())) {
           return {
             textResultForLlm:
-              'Visual preview is not available — LibreOffice (`soffice`) is not on $PATH. Tell the user and proceed without the visual critique. They can install it on Ubuntu/WSL with: sudo apt install libreoffice poppler-utils',
+              'Visual preview is not available — LibreOffice (`soffice`) is not on $PATH. Tell the user and proceed without the visual critique.',
             resultType: 'failure' as const,
             error: 'libreoffice_missing',
           };
         }
 
         try {
-          const pngPath = await renderSlideToPng(plan, args.slideId, {
+          const pngPath = await renderSlideToPng(brief, ctx.getAllSlideCode(), args.slideId, {
             template: ctx.getTemplate() ?? undefined,
           });
           const bytes = await readPng(pngPath);
           const base64 = bytes.toString('base64');
-          const slideIdx = plan.slides.findIndex((s) => s.id === args.slideId);
+          const slideIdx = brief.slides.findIndex((s) => s.id === args.slideId);
           const remaining = allow.remaining;
           return {
-            textResultForLlm: `Rendered slide ${slideIdx + 1} ("${args.slideId}") to a PNG (attached). ${remaining} critique pass${remaining === 1 ? '' : 'es'} remaining for this slide. Look at the image; if it's not as good as the references, call revise_slide.`,
+            textResultForLlm: `Slide ${slideIdx + 1} ("${args.slideId}") re-previewed. ${remaining} pass${remaining === 1 ? '' : 'es'} remaining. Compare against sibling slides for cross-slide consistency.`,
             binaryResultsForLlm: [
               {
                 type: 'image' as const,
@@ -398,6 +328,133 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         }
       },
     }) as Tool,
+
+    defineTool('render_deck', {
+      description:
+        "Render the current DeckBrief + slide code to a .pptx on disk. Returns the absolute path. Call this when the user signals they're happy with the deck (typically after Phase 3).",
+      parameters: RenderArgs,
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ path: string; slides: number }>> => {
+        const brief = ctx.getBrief();
+        if (!brief) {
+          return {
+            ok: false,
+            error: 'No brief to render.',
+            hint: 'Call propose_deck_brief first.',
+          };
+        }
+        const out = args.outputPath ?? ctx.defaultOutputPath();
+        try {
+          const abs = await renderDeck(brief, ctx.getAllSlideCode(), out, {
+            template: ctx.getTemplate() ?? undefined,
+          });
+          return {
+            ok: true,
+            message: `Wrote ${brief.slides.length}-slide deck to ${abs}.`,
+            data: { path: abs, slides: brief.slides.length },
+          };
+        } catch (e) {
+          if (e instanceof SlideCodeError) {
+            return {
+              ok: false,
+              error: `Slide "${e.slideId}" code threw during render: ${e.message}`,
+              hint: 'Fix the offending slide with write_slide_code, then retry.',
+            };
+          }
+          return { ok: false, error: `Render failed: ${(e as Error).message}` };
+        }
+      },
+    }) as Tool,
+
+    defineTool('save_deck', {
+      description:
+        'Render the current DeckBrief + slide code to .pptx AND (by default) write a brief.json plus one .slide.ts per slide alongside it. The .ts files are re-runnable: each contains exactly the code you passed to write_slide_code.',
+      parameters: SaveArgs,
+      skipPermission: true,
+      handler: async (
+        args,
+      ): Promise<ToolResult<{ pptx: string; brief?: string; slides?: string[] }>> => {
+        const brief = ctx.getBrief();
+        if (!brief) {
+          return {
+            ok: false,
+            error: 'No brief to save.',
+            hint: 'Call propose_deck_brief first.',
+          };
+        }
+        const out = args.outputPath ?? ctx.defaultOutputPath();
+        try {
+          const abs = await renderDeck(brief, ctx.getAllSlideCode(), out, {
+            template: ctx.getTemplate() ?? undefined,
+          });
+          const data: { pptx: string; brief?: string; slides?: string[] } = { pptx: abs };
+          if (args.includeSources) {
+            const base = abs.replace(/\.pptx$/i, '');
+            const briefPath = `${base}.brief.json`;
+            await mkdir(dirname(briefPath), { recursive: true });
+            await writeFile(briefPath, JSON.stringify(brief, null, 2));
+            data.brief = briefPath;
+            const slidePaths: string[] = [];
+            for (const slide of brief.slides) {
+              const code = ctx.getSlideCode(slide.id);
+              if (!code) continue;
+              const sp = `${base}.${slide.id}.slide.ts`;
+              await writeFile(sp, code);
+              slidePaths.push(sp);
+            }
+            data.slides = slidePaths;
+          }
+          return {
+            ok: true,
+            message: `Saved deck to ${abs}${data.brief ? ` (+ ${data.brief}` : ''}${data.slides ? ` + ${data.slides.length} slide source files)` : ''}.`,
+            data,
+          };
+        } catch (e) {
+          if (e instanceof SlideCodeError) {
+            return {
+              ok: false,
+              error: `Slide "${e.slideId}" code threw during save: ${e.message}`,
+              hint: 'Fix with write_slide_code, then retry.',
+            };
+          }
+          return { ok: false, error: `Save failed: ${(e as Error).message}` };
+        }
+      },
+    }) as Tool,
+
+    defineTool('inspect_template', {
+      description:
+        'Load a `.pptx` whose theme (accent colour, fonts) should be inherited by subsequent renders. The slides in the template file are NOT imported — only its visual style. Returns a one-paragraph summary so you can react to it when proposing the theme.',
+      parameters: z.object({
+        path: z
+          .string()
+          .min(1)
+          .max(512)
+          .describe(
+            'Path (relative to cwd or absolute) to a .pptx file to use as a style template.',
+          ),
+      }),
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ summary: string }>> => {
+        try {
+          const profile = await ctx.loadTemplate(args.path);
+          return {
+            ok: true,
+            message: `Template loaded: ${profile.sourcePath}`,
+            data: { summary: summarizeTemplate(profile) },
+          };
+        } catch (e) {
+          return {
+            ok: false,
+            error: `Template load failed: ${(e as Error).message}`,
+            hint: 'Verify the path is a valid .pptx file.',
+          };
+        }
+      },
+    }) as Tool,
   ];
   return tools;
 }
+
+// Re-export Theme for callers that build a DeckToolContext.
+export type { Theme };

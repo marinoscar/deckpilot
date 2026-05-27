@@ -1,19 +1,16 @@
-import React from 'react';
-import { render } from 'ink';
 import { Flags } from '@oclif/core';
+import { render } from 'ink';
+import React from 'react';
+import { ChatSession } from '../chat/session.js';
 import { BaseCommand } from '../cli/base-command.js';
 import { createClient } from '../copilot/client.js';
-import { ChatSession } from '../chat/session.js';
 import { App } from '../ui/App.js';
 
 export default class Chat extends BaseCommand {
   static override description =
     'Enter the interactive DeckPilot chat. Have a conversation with GitHub Copilot to plan and produce a PowerPoint deck.';
 
-  static override examples = [
-    '<%= config.bin %> chat',
-    '<%= config.bin %> chat --model gpt-5',
-  ];
+  static override examples = ['<%= config.bin %> chat', '<%= config.bin %> chat --model gpt-5'];
 
   static override flags = {
     model: Flags.string({
