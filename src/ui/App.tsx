@@ -8,6 +8,7 @@ import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
 import { renderPlan } from '../render/renderer.js';
 import { summarizePlan } from '../deck/revise.js';
+import { summarizeTemplate } from '../template/profile.js';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
@@ -107,7 +108,9 @@ export const App: React.FC<Props> = ({ session }) => {
         const out = slash.outputPath ?? session.defaultOutputPath();
         session.addSystemMessage(`Rendering ${plan.slides.length}-slide deck → ${out} …`);
         try {
-          const abs = await renderPlan(plan, out);
+          const abs = await renderPlan(plan, out, {
+            template: session.getTemplate() ?? undefined,
+          });
           session.addSystemMessage(`Wrote ${abs}`);
         } catch (e) {
           session.addSystemMessage(`render failed: ${(e as Error).message}`);
@@ -123,13 +126,48 @@ export const App: React.FC<Props> = ({ session }) => {
         const out = slash.outputPath ?? session.defaultOutputPath();
         session.addSystemMessage(`Saving deck + plan.json → ${out} …`);
         try {
-          const abs = await renderPlan(plan, out);
+          const abs = await renderPlan(plan, out, {
+            template: session.getTemplate() ?? undefined,
+          });
           const jsonPath = resolve(dirname(abs), `${abs.replace(/\.pptx$/i, '')}.plan.json`);
           await mkdir(dirname(jsonPath), { recursive: true });
           await writeFile(jsonPath, JSON.stringify(plan, null, 2));
           session.addSystemMessage(`Wrote ${abs}\n     and ${jsonPath}`);
         } catch (e) {
           session.addSystemMessage(`save failed: ${(e as Error).message}`);
+        }
+        return;
+      }
+      case 'template': {
+        if (!slash.path) {
+          const cur = session.getTemplate();
+          session.addSystemMessage(
+            cur ? summarizeTemplate(cur) : 'No template loaded. Try /template ./brand.pptx',
+          );
+          return;
+        }
+        session.addSystemMessage(`Loading template ${slash.path} …`);
+        try {
+          const profile = await session.loadTemplate(slash.path);
+          session.addSystemMessage(summarizeTemplate(profile));
+        } catch (e) {
+          session.addSystemMessage(`Template load failed: ${(e as Error).message}`);
+        }
+        return;
+      }
+      case 'load': {
+        if (!slash.path) {
+          session.addSystemMessage('Usage: /load <path-to-plan.json>');
+          return;
+        }
+        session.addSystemMessage(`Loading plan ${slash.path} …`);
+        try {
+          const plan = await session.loadPlanFromFile(slash.path);
+          session.addSystemMessage(
+            `Loaded ${plan.slides.length}-slide plan "${plan.meta.title}". You can edit it via chat or render it with /render.`,
+          );
+        } catch (e) {
+          session.addSystemMessage(`Plan load failed: ${(e as Error).message}`);
         }
         return;
       }

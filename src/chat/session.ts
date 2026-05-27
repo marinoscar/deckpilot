@@ -5,8 +5,13 @@ import { buildDeckTools, type DeckToolContext } from '../tools/index.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { applySlidePatch } from '../deck/revise.js';
 import type { Slide, SlidePatch, SlidePlan } from '../deck/schema.js';
+import { SlidePlanSchema } from '../deck/schema.js';
+import type { TemplateProfile } from '../template/profile.js';
+import { summarizeTemplate } from '../template/profile.js';
+import { inspectTemplate } from '../template/inspect.js';
 import { log } from '../util/logger.js';
 import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 export type TranscriptEntry =
   | { kind: 'user'; id: string; text: string }
@@ -18,9 +23,12 @@ export type SessionListener = (entries: TranscriptEntry[]) => void;
 export type ModelListener = (model: string) => void;
 export type BusyListener = (busy: boolean) => void;
 export type PlanListener = (plan: SlidePlan | null) => void;
+export type TemplateListener = (template: TemplateProfile | null) => void;
 
 export type ChatSessionOptions = {
   model?: string;
+  /** Path to a `.pptx` whose theme/fonts should be inherited at startup. */
+  templatePath?: string;
 };
 
 /** Maximum SlidePlan revisions we keep around for `/undo`. */
@@ -46,12 +54,19 @@ export class ChatSession {
   private planHistory: (SlidePlan | null)[] = [];
   private planListeners = new Set<PlanListener>();
 
+  /** Active template, inherited theme + fonts during rendering. */
+  private template: TemplateProfile | null = null;
+  private templateListeners = new Set<TemplateListener>();
+  /** Where to load a template from on first start, if the user passed one. */
+  private requestedTemplatePath: string | undefined;
+
   constructor(
     private readonly dp: DeckPilotClient,
     opts: ChatSessionOptions = {},
   ) {
     this.requestedModel = opts.model;
     this.activeModel = opts.model ?? null;
+    this.requestedTemplatePath = opts.templatePath;
   }
 
   getModel(): string {
@@ -128,6 +143,57 @@ export class ChatSession {
     return true;
   }
 
+  // ---- template state ----
+
+  getTemplate(): TemplateProfile | null {
+    return this.template;
+  }
+
+  onTemplateChange(fn: TemplateListener): () => void {
+    this.templateListeners.add(fn);
+    fn(this.template);
+    return () => {
+      this.templateListeners.delete(fn);
+    };
+  }
+
+  async loadTemplate(path: string): Promise<TemplateProfile> {
+    const profile = await inspectTemplate(path);
+    this.template = profile;
+    for (const fn of this.templateListeners) fn(profile);
+    return profile;
+  }
+
+  clearTemplate(): void {
+    if (!this.template) return;
+    this.template = null;
+    for (const fn of this.templateListeners) fn(null);
+  }
+
+  /**
+   * Load a previously-saved DeckPilot `.plan.json` as the working plan. The
+   * file MUST be a SlidePlan that validates against the current schema.
+   */
+  async loadPlanFromFile(path: string): Promise<SlidePlan> {
+    const raw = await readFile(resolve(process.cwd(), path), 'utf8');
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`${path} is not valid JSON: ${(e as Error).message}`);
+    }
+    const parsed = SlidePlanSchema.safeParse(json);
+    if (!parsed.success) {
+      throw new Error(
+        `SlidePlan in ${path} failed validation:\n${parsed.error.issues
+          .map((i) => `  ${i.path.join('.')}: ${i.message}`)
+          .join('\n')}`,
+      );
+    }
+    this.setPlan(parsed.data);
+    return parsed.data;
+  }
+
   defaultOutputPath(): string {
     const title = this.plan?.meta.title ?? 'deckpilot-output';
     const slug =
@@ -145,6 +211,8 @@ export class ChatSession {
       setPlan: (p) => this.setPlan(p),
       patchSlide: (id, patch) => this.patchSlide(id, patch),
       defaultOutputPath: () => this.defaultOutputPath(),
+      getTemplate: () => this.template,
+      loadTemplate: (p) => this.loadTemplate(p),
     };
   }
 
@@ -159,6 +227,16 @@ export class ChatSession {
       model: this.requestedModel,
     });
     this.attachEvents(this.session);
+    if (this.requestedTemplatePath) {
+      try {
+        const profile = await this.loadTemplate(this.requestedTemplatePath);
+        this.addSystemMessage(`Template loaded: ${summarizeTemplate(profile)}`);
+      } catch (e) {
+        this.addSystemMessage(
+          `Could not load template from ${this.requestedTemplatePath}: ${(e as Error).message}`,
+        );
+      }
+    }
   }
 
   /**

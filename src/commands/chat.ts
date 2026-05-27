@@ -25,12 +25,19 @@ export default class Chat extends BaseCommand {
       required: false,
       env: 'COPILOT_GITHUB_TOKEN',
     }),
+    template: Flags.string({
+      description: 'Path to a .pptx to inherit theme + fonts from (renders will use its style).',
+      required: false,
+    }),
   };
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Chat);
     const dp = createClient({ gitHubToken: flags.token });
-    const session = new ChatSession(dp, { model: flags.model });
+    const session = new ChatSession(dp, {
+      model: flags.model,
+      templatePath: flags.template,
+    });
 
     try {
       await session.start();

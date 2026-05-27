@@ -8,6 +8,11 @@ const PptxGenJS = pptxgenjsImport as unknown as new () => any;
 
 import type { Slide, SlidePlan, Bullet, Column } from '../deck/schema.js';
 import { DEFAULT_THEME, type Theme, SLIDE_W, SLIDE_H, SIDE_MARGIN } from '../deck/theme.js';
+import type { TemplateProfile } from '../template/profile.js';
+
+export type RenderOptions = {
+  template?: TemplateProfile;
+};
 
 /**
  * Render a validated SlidePlan to a `.pptx` file on disk.
@@ -16,14 +21,21 @@ import { DEFAULT_THEME, type Theme, SLIDE_W, SLIDE_H, SIDE_MARGIN } from '../dec
  * colour, consistent layout decisions across the deck. The renderer is
  * deterministic — no LLM at this layer. The LLM's job is to produce a good
  * plan; this layer's job is to make any plan look as good as possible.
+ *
+ * Theme resolution order (lowest → highest priority):
+ *   DEFAULT_THEME ← TemplateProfile (if provided) ← plan.theme (if provided)
  */
-export async function renderPlan(plan: SlidePlan, outPath: string): Promise<string> {
+export async function renderPlan(
+  plan: SlidePlan,
+  outPath: string,
+  opts: RenderOptions = {},
+): Promise<string> {
   const pres = new PptxGenJS();
   pres.layout = plan.meta.aspect === '4:3' ? 'LAYOUT_STANDARD' : 'LAYOUT_WIDE';
   pres.title = plan.meta.title;
   if (plan.meta.author) pres.author = plan.meta.author;
 
-  const theme = mergeTheme(plan.theme);
+  const theme = mergeTheme(plan.theme, opts.template);
   const total = plan.slides.length;
   // First slide is the title — never gets a footer. Section slides also
   // skip the footer for visual breathing room.
@@ -42,15 +54,28 @@ export async function renderPlan(plan: SlidePlan, outPath: string): Promise<stri
   return abs;
 }
 
-function mergeTheme(override?: SlidePlan['theme']): Theme {
+function mergeTheme(planTheme?: SlidePlan['theme'], template?: TemplateProfile): Theme {
   return {
     ...DEFAULT_THEME,
-    ...(override?.accent ? { accent: override.accent } : {}),
-    ...(override?.ink ? { ink: override.ink } : {}),
-    ...(override?.muted ? { muted: override.muted } : {}),
-    ...(override?.paper ? { paper: override.paper } : {}),
-    ...(override?.fontHeading ? { fontHeading: override.fontHeading } : {}),
-    ...(override?.fontBody ? { fontBody: override.fontBody } : {}),
+    // Template overrides defaults: theme colours, fonts.
+    ...(template
+      ? {
+          accent: template.colors.accent,
+          ...(template.colors.accentDark ? { accentDark: template.colors.accentDark } : {}),
+          ...(template.colors.ink ? { ink: template.colors.ink } : {}),
+          ...(template.colors.muted ? { muted: template.colors.muted } : {}),
+          ...(template.colors.paper ? { paper: template.colors.paper } : {}),
+          fontHeading: template.fonts.heading,
+          fontBody: template.fonts.body,
+        }
+      : {}),
+    // Plan-level overrides win — the LLM (or the user) can still tweak per deck.
+    ...(planTheme?.accent ? { accent: planTheme.accent } : {}),
+    ...(planTheme?.ink ? { ink: planTheme.ink } : {}),
+    ...(planTheme?.muted ? { muted: planTheme.muted } : {}),
+    ...(planTheme?.paper ? { paper: planTheme.paper } : {}),
+    ...(planTheme?.fontHeading ? { fontHeading: planTheme.fontHeading } : {}),
+    ...(planTheme?.fontBody ? { fontBody: planTheme.fontBody } : {}),
   };
 }
 

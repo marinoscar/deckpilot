@@ -11,6 +11,8 @@ import {
 } from '../deck/schema.js';
 import { applySlidePatch, summarizePlan, summarizeSlide } from '../deck/revise.js';
 import { renderPlan } from '../render/renderer.js';
+import type { TemplateProfile } from '../template/profile.js';
+import { summarizeTemplate } from '../template/profile.js';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
@@ -23,6 +25,8 @@ export type DeckToolContext = {
   setPlan: (plan: SlidePlan) => void;
   patchSlide: (slideId: string, patch: z.infer<typeof SlidePatchSchema>) => Slide;
   defaultOutputPath: () => string;
+  getTemplate: () => TemplateProfile | null;
+  loadTemplate: (path: string) => Promise<TemplateProfile>;
 };
 
 type ToolResult<T = unknown> =
@@ -143,7 +147,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         }
         const out = args.outputPath ?? ctx.defaultOutputPath();
         try {
-          const abs = await renderPlan(plan, out);
+          const abs = await renderPlan(plan, out, { template: ctx.getTemplate() ?? undefined });
           return {
             ok: true,
             message: `Wrote ${plan.slides.length}-slide deck to ${abs}.`,
@@ -171,7 +175,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         }
         const out = args.outputPath ?? ctx.defaultOutputPath();
         try {
-          const abs = await renderPlan(plan, out);
+          const abs = await renderPlan(plan, out, { template: ctx.getTemplate() ?? undefined });
           const data: { pptx: string; planJson?: string } = { pptx: abs };
           if (args.includePlanJson) {
             const jsonPath = resolve(
@@ -189,6 +193,35 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           };
         } catch (e) {
           return { ok: false, error: `Save failed: ${(e as Error).message}` };
+        }
+      },
+    }) as Tool,
+
+    defineTool('inspect_template', {
+      description:
+        'Load a `.pptx` whose theme (accent colour, fonts) should be inherited by subsequent renders. The slides in the template file are NOT imported — only its visual style. Returns a one-paragraph summary of what was extracted so you can confirm or react to it.',
+      parameters: z.object({
+        path: z
+          .string()
+          .min(1)
+          .max(512)
+          .describe('Path (relative to cwd or absolute) to a .pptx file to use as a style template.'),
+      }),
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ summary: string }>> => {
+        try {
+          const profile = await ctx.loadTemplate(args.path);
+          return {
+            ok: true,
+            message: `Template loaded: ${profile.sourcePath}`,
+            data: { summary: summarizeTemplate(profile) },
+          };
+        } catch (e) {
+          return {
+            ok: false,
+            error: `Template load failed: ${(e as Error).message}`,
+            hint: 'Verify the path is a valid .pptx file.',
+          };
         }
       },
     }) as Tool,

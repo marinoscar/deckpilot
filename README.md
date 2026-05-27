@@ -4,7 +4,7 @@
 
 Have a normal conversation in your terminal — DeckPilot drafts the outline, lets you revise it slide-by-slide, then renders a real `.pptx` you can hand off. Same terminal UX feel as Claude Code or GitHub Copilot CLI, with `pptxgenjs` as the renderer.
 
-> **Status:** M2 — outline-first generation works end-to-end. The agent authors a validated `SlidePlan`, you iterate slide-by-slide, and the renderer emits a `.pptx` with proper type hierarchy, accent strips, section dividers, two-column comparisons, pull-quote layouts, footers, and speaker notes. Templates (M3) and charts (M4) are next on the roadmap.
+> **Status:** M3 — templates + file picker shipped. The agent inherits theme colours and fonts from any user-supplied `.pptx` (style only, slides not imported), reloads previously-saved `.plan.json` files for editing, and the `@` picker surfaces relevant files from the working directory. Charts (M4) are next.
 
 ---
 
@@ -97,24 +97,37 @@ You drop into an Ink-rendered chat with the Copilot SDK as the brain. Anything y
 | `/show` | Print the full plan as JSON |
 | `/render [path]` | Render the current plan to `.pptx` (default: `./<title>.pptx`) |
 | `/save [path]` | Render + also save a `.plan.json` next to the deck for re-editing |
+| `/load <path>` | Load a previously-saved `.plan.json` as the working plan |
+| `/template <path>` | Inherit theme + fonts from an existing `.pptx` (style only) |
+| `/template` | Show the currently-loaded template |
 | `/undo` | Roll back the most recent plan change |
 | `/clear` | Reset the transcript (keep the deck plan) |
 | `/new` | Reset everything |
 | `/model`, `/models` | Inspect or switch the active model |
 | `/quit`, `/exit` | Exit |
 
+**The `@` picker:** type `@` in the prompt to open a popup of `.pptx` and `.plan.json` files in your working directory. Arrow keys to navigate, Enter to insert the path, Esc to cancel. Handy for `/template @brand.pptx`, `/load @last-deck.plan.json`, or just dropping a file reference into chat.
+
 **Cancelling:** **Ctrl+C** while a response is streaming aborts the generation but keeps the session alive. A second **Ctrl+C** within ~1s exits DeckPilot. (Same convention as Claude Code.)
 
 ### Example session
 
 ```
+› /template @brand.pptx              # picker pops up; pick the brand deck
+   ✓ Template loaded: accent #C2410C, fonts: Playfair Display / Source Sans Pro
 › make me a 7-slide intro to vector databases for a CTO audience
-  · the agent calls propose_outline; you see "Outline accepted (7 slides)"
+   · agent calls propose_outline; "Outline accepted (7 slides)"
 › revise slide s3 to add a bullet about hybrid search
-  · the agent calls revise_slide; the change is applied to the plan
-› /outline
-  · prints the deck at a glance — titles + bullet counts
-› /save                     # renders to ./vector-databases.pptx + .plan.json
+   · agent calls revise_slide; change applied
+› /outline                            # at-a-glance view
+› /save                                # writes .pptx + .plan.json (themed!)
+```
+
+To pick up where you left off later:
+```
+› /load @vector-databases.plan.json    # picker shows your saved plans
+› change slide s3 to mention pgvector  # iterate
+› /save                                # overwrites with new state
 ```
 
 ---
