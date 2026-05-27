@@ -132,11 +132,46 @@ To pick up where you left off later:
 
 ---
 
+## How it works
+
+DeckPilot follows the **outline-first** pattern: the LLM never writes rendering code, it produces a structured `SlidePlan` via tool calls, and a deterministic renderer turns that plan into a `.pptx`. This is what keeps output consistent across runs.
+
+```
+your chat ─► Copilot SDK ──► propose_outline / revise_slide  ──► SlidePlan (zod-validated)
+                                                                      │
+                                                       (optional)     ▼
+                                                       template ─►  pptxgenjs renderer
+                                                                      │
+                                                                      ▼
+                                                                  deck.pptx
+```
+
+The LLM does *content* and *layout selection*. The renderer does *visual execution*. Constraints baked into the schema (max 6 bullets per slide, max 2 nesting levels, capped title length) are how DeckPilot enforces visual restraint — the model can't generate cluttered slides because the schema rejects them.
+
+### What the renderer produces
+
+Six slide layouts with deliberate visual design:
+
+| Layout | When | What it renders |
+|---|---|---|
+| **title** | Opening slide | Big bold title, optional subtitle in muted grey, accent-coloured strip above, author/date pinned to the bottom |
+| **content** | Most body slides | Thin accent bar at the top-left, title in accent colour, 3–6 bullets in accent/muted hierarchy, footer with page count |
+| **two-col** | Side-by-side comparison | Title above two columns with optional headings, muted vertical divider between them |
+| **section** | Chapter divider | Full-bleed accent background, large white title (and optional "01" number for visual rhythm), no footer |
+| **quote** | Pull quote | Oversized accent `"` glyph as graphic cue, italic quote text, attribution in muted footer position |
+| **closing** | Thanks / contact | Centered title on accent background, optional subtitle and contact line |
+
+All slides get speaker notes (the model is required to populate them). Footers (small, muted "page x of y" + dim deck title) appear on content and two-col slides only — title, section, and closing get breathing room.
+
+**Theme:** defaults to a clean Inter / Inter Tight pair with an IBM Carbon-derived blue (`#0F62FE`). Override per deck via `/template @brand.pptx` (full inheritance from a corporate `.pptx`) or let the LLM set theme colours directly in `propose_outline`.
+
+---
+
 ## All top-level commands
 
 ```
 deckpilot              # enter the chat (alias for `deckpilot chat`)
-deckpilot chat         # explicit form, accepts --model and --token flags
+deckpilot chat         # explicit form: --model, --token, --template flags
 deckpilot version      # print version + platform info
 deckpilot --version    # short form
 deckpilot doctor       # preflight diagnostics
@@ -169,11 +204,11 @@ This unlinks the global binary and removes the bootstrap clone (if any). It does
 
 ## Roadmap
 
-- **M1 (current)** — Spine: chat loop + streaming + Ctrl+C + hardcoded `/render`.
-- **M2** — Outline-first generation: zod-validated `SlidePlan` + LLM tools `propose_outline`, `revise_slide`, `render_deck`, `save_deck`. Per-session `.deckpilot/` working dirs.
-- **M3** — User `.pptx` templates: theme/font/master inheritance via OOXML inspection.
-- **M4** — Native charts from structured data (column/line/pie/etc.) + one-shot `deckpilot new "<topic>"` + interactive `deckpilot tutorial`.
-- **M5** — Hardening, telemetry opt-in, cross-platform smoke, npm publish.
+- ✅ **M1** — Spine: chat loop + streaming + Ctrl+C + slash commands.
+- ✅ **M2** — Outline-first generation: zod-validated `SlidePlan`, LLM tools `propose_outline` / `revise_slide` / `render_deck` / `save_deck`, per-deck `.plan.json` for re-editing.
+- ✅ **M3 (current)** — `.pptx` template inheritance (theme + fonts), `@` file picker, plan reload from `.plan.json`, `inspect_template` tool.
+- 🔜 **M4** — Native charts from structured data (column/line/pie/etc.) + one-shot `deckpilot new "<topic>"` + interactive `deckpilot tutorial`.
+- 🔜 **M5** — Hardening, telemetry opt-in, cross-platform smoke tests, npm publish.
 
 ---
 
