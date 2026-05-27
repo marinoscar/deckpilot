@@ -25,7 +25,17 @@ set -euo pipefail
 
 # Bumped on every release of the installer. Printed at the top of every run so
 # users can confirm what they're actually executing (CDN cache misses are real).
-INSTALL_SCRIPT_VERSION="0.1.1"
+INSTALL_SCRIPT_VERSION="0.1.2"
+
+# CRITICAL: detach stdin from whatever invoked us before running any child
+# process. Under `curl ... | bash`, bash's stdin is the script body in the
+# pipe. Child processes inherit that stdin; if even one of them (npm,
+# npx, git, …) reads a byte, those bytes are stolen from the in-flight
+# script and bash will silently EOF and exit mid-way. Symptom: the script
+# stops right after the last npm step ("Manifest ready") with no error.
+# We never need stdin from the caller — interactive prompts below are
+# already guarded by `[ -t 0 ]` and will skip cleanly.
+exec </dev/null
 
 MODE="user"
 SKIP_BUILD=0
