@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import which from 'which';
 
@@ -157,8 +157,11 @@ async function rasteriseViaPdf(
   }
 
   // soffice names the PDF after the input basename, dropping any path.
-  const base = pptxPath.split('/').pop() ?? pptxPath;
-  const pdfBase = base.replace(/\.pptx$/i, '.pdf');
+  // Use `path.basename` (not `split('/').pop()`) so this works on Windows
+  // too — split('/') leaves `C:\Users\…\deck.pptx` intact, which then
+  // gets join()'d under outDir and produces a doubled path like
+  // `<outDir>\C:\Users\…\deck.pdf`.
+  const pdfBase = basename(pptxPath).replace(/\.pptx$/i, '.pdf');
   const pdfPath = join(outDir, pdfBase);
   if (!existsSync(pdfPath)) {
     throw new Error(`Expected ${pdfPath} after LibreOffice PDF conversion`);

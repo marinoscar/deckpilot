@@ -7,6 +7,7 @@
  * resulting JSON to add logos / voice / brand metadata that don't live in
  * a .pptx theme part.
  */
+import { basename } from 'node:path';
 import { inspectTemplate } from './inspect.js';
 import { type TemplateSpec, TemplateSpecSchema } from './spec.js';
 
@@ -31,7 +32,7 @@ export async function templateFromPptx(
   const draft = {
     schemaVersion: '1.0' as const,
     name,
-    description: opts.description ?? `Imported from ${pptxPath.split('/').pop() ?? pptxPath}.`,
+    description: opts.description ?? `Imported from ${basename(pptxPath)}.`,
     brand: opts.brand,
     theme: {
       accent: profile.colors.accent,
