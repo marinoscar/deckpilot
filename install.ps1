@@ -1,4 +1,4 @@
-# DeckPilot installer for Windows (PowerShell 5.1+ / PowerShell 7+).
+﻿# DeckPilot installer for Windows (PowerShell 5.1+ / PowerShell 7+).
 #
 # Mirrors install.sh: clones the repo (or uses your local checkout), builds,
 # links the `deckpilot` command, offers to install LibreOffice + poppler
@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.14.2'
+$INSTALL_SCRIPT_VERSION = '0.14.3'
 
 # ---------- globals ----------
 
@@ -531,9 +531,10 @@ function Test-PathContains($bin) {
     if ($found) { return }
     Write-Warn "$bin is not on your PATH in this session."
     Write-Note "Add it permanently via:"
-    # NOTE: PowerShell quoting — backtick-quote (`") for literal double quotes,
-    # backtick-dollar (`$) to suppress subexpression evaluation. $bin IS
-    # interpolated so the user copy-pastes the actual path.
+    # NOTE: PowerShell uses backtick-quote inside a double-quoted string to
+    # produce a literal double quote, and backtick-dollar to suppress
+    # subexpression evaluation. $bin IS interpolated so the user
+    # copy-pastes the actual path.
     Write-Note "  [Environment]::SetEnvironmentVariable('Path', `"`$([Environment]::GetEnvironmentVariable('Path','User'));$bin`", 'User')"
     Write-Note "Or open a new shell — npm's install of Node typically adds it on first run."
 }
