@@ -12,9 +12,21 @@ throughout. Scoop is the simplest option on Windows because:
 - **One uninstall command** — `scoop uninstall foo`, no orphaned files.
 - **Has poppler** — winget doesn't, chocolatey needs admin.
 
-Where it makes sense the doc also shows the winget equivalents (Node + git
-in particular — Microsoft's own tools install cleanly via winget). For
+Where it makes sense the doc also shows the winget equivalents (Node in
+particular — Microsoft's own tools install cleanly via winget). For
 LibreOffice and poppler, **scoop is the recommended path**.
+
+## How install.ps1 actually downloads
+
+`install.ps1` does **not** use `git clone`. It downloads the GitHub zip
+tarball via `Invoke-WebRequest` and extracts with `Expand-Archive`. This
+matters on corporate Windows machines: PowerShell's `Invoke-WebRequest`
+uses **Schannel** (the Windows native TLS stack) which already trusts
+your corporate root CA — Edge browses to github.com fine because of
+this. Git for Windows defaults to OpenSSL with its own bundled CA store
+which does NOT trust the corporate root, so `git clone` fails on the
+same network. The zip path side-steps that entirely. As a bonus, **git
+is no longer a required prerequisite**.
 
 ## Two ways to install DeckPilot
 
@@ -37,8 +49,9 @@ iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps
 ```
 
 That runs the installer non-interactively. Re-running it later auto-detects
-the existing install and switches into a fast update path (fetch + rebuild
-only).
+the existing install and switches into a fast update path (re-download +
+rebuild only, with `node_modules` preserved when `package-lock.json`
+hasn't changed).
 
 If you'd rather do every step yourself, skip down to
 [Recommended workflow](#recommended-workflow-step-by-step).
@@ -51,9 +64,10 @@ If you'd rather do every step yourself, skip down to
 | **PowerShell 5.1+** | Ships with Windows. PowerShell 7+ is recommended ([install via scoop](#install-powershell-7-optional)). |
 | **scoop** | Recommended package manager. See [Step 0](#step-0--install-scoop-once-per-user). |
 | **Node.js ≥ 20** | Required. Via scoop: `scoop install nodejs-lts`. |
-| **git** | Required for the bootstrap clone. Via scoop: `scoop install git`. |
 | **GitHub Copilot subscription** | Required at *runtime* (not install). |
 | **LibreOffice + poppler** | Recommended. Powers vision-driven `template create --from <pptx>` and the visual critique loop. DeckPilot still installs without them — affected features fall back. |
+
+**Not required:** git. The installer uses zip download.
 
 ## Recommended workflow (step-by-step)
 
@@ -91,8 +105,9 @@ scoop --version    # should print v0.5.x or similar
 scoop bucket list  # should show "main"
 ```
 
-If you're behind a corporate proxy / TLS-inspecting firewall and `iwr` fails,
-see the [Troubleshooting](#troubleshooting) section.
+If you're behind a corporate proxy / TLS-inspecting firewall and `iwr`
+fails, see
+[Corporate / locked-down machines](#corporate--locked-down-machines).
 
 ### Step 1 — Verify the rest of your environment
 
@@ -108,12 +123,6 @@ npm --version        # should print 10.x or higher
 
 If `node` reports "not recognized" or prints v18 or older, install in Step 2.
 
-#### git
-
-```powershell
-git --version        # should print "git version 2.x.x.windows.x" or similar
-```
-
 #### PowerShell version
 
 ```powershell
@@ -128,7 +137,7 @@ LibreOffice usually isn't on `PATH` by default, so check by binary path:
 # Scoop install location (if you used scoop)
 Test-Path "$HOME\scoop\apps\libreoffice\current\program\soffice.exe"
 
-# Or the MSI install location (if you installed manually)
+# Or the MSI install location (winget or manual installer)
 Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
 ```
 
@@ -171,20 +180,6 @@ npm --version
 
 > Alternative (Microsoft tool, requires accepting the MSI installer's UAC
 > prompt): `winget install OpenJS.NodeJS.LTS`
-
-#### Install git
-
-```powershell
-scoop install git
-```
-
-Re-verify:
-
-```powershell
-git --version
-```
-
-> Alternative: `winget install Git.Git`
 
 #### Install LibreOffice (recommended)
 
@@ -234,43 +229,49 @@ Then launch `pwsh` instead of `powershell` going forward.
 ### Step 3 — Run the installer
 
 Now that all the system deps are in place, run the DeckPilot installer with
-`-NoInstallDeps` so it skips the system-dep prompt and just installs
-DeckPilot itself:
+`-NoInstallDeps` so it skips the system-dep prompt:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 | iex -Args '-NoInstallDeps'
-```
-
-Or, if you'd rather have the script on disk first (lets you read it):
-
-```powershell
+# Download the installer to disk first — see the "tip" box below for why
 iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 -OutFile install.ps1
+
+# Verify what you got before running
+Select-String -Path install.ps1 -Pattern 'INSTALL_SCRIPT_VERSION'
+
+# Run from disk
 .\install.ps1 -NoInstallDeps
 ```
 
+> **Tip — prefer downloading to disk over `iwr | iex`.** When the script
+> is piped into `iex` and hits a hard failure, the whole PowerShell
+> window can close before you see the error. Running `.\install.ps1`
+> from disk keeps the shell open on failure so you can read the
+> traceback. (v0.14.2 onwards uses `throw` instead of `exit` to mitigate
+> this, but downloading first is still the more debuggable habit.)
+
 The installer will:
 
-1. Preflight Node ≥ 20, git, disk space, and network reachability to github.com.
+1. Preflight Node ≥ 20, disk space, network reachability to github.com,
+   and detect LibreOffice + pdftoppm (probes PATH AND standard install
+   dirs).
 2. Skip the system-dep prompt (because of `-NoInstallDeps`).
-3. Clone DeckPilot to `%USERPROFILE%\.deckpilot\repo`.
+3. Download the GitHub zip tarball via `Invoke-WebRequest` to
+   `%USERPROFILE%\.deckpilot\repo`.
 4. Run `npm ci` + `npm run build` + `npx oclif manifest`.
 5. Link `deckpilot` globally via `npm link`.
 6. Run `deckpilot doctor` and stream its output — your final verification.
 
-If `deckpilot doctor` shows green checks across the board, you're done.
-Run `deckpilot` to open the menu.
-
-## What the installer prints
+## What the installer prints (v0.14.5+)
 
 ```
-DeckPilot installer v0.14.0
+DeckPilot installer v0.14.5
 · Preflight
-✓ Node v22.11.0
-✓ Disk: 88420 MB free on drive C:
+✓ Node 22.11.0
+✓ Disk: 63437 MB free on drive C:
 ✓ Network: github.com reachable
 ✓ Visual pipeline deps present (LibreOffice + pdftoppm)
-· Cloning https://github.com/marinoscar/deckpilot.git@main → C:\Users\you\.deckpilot\repo
-✓ Cloned
+· Downloading https://github.com/marinoscar/deckpilot/archive/refs/heads/main.zip
+✓ Downloaded + extracted from https://github.com/marinoscar/deckpilot/archive/refs/heads/main.zip
 · Installing npm deps
 ✓ Dependencies installed
 · Building TypeScript
@@ -280,15 +281,40 @@ DeckPilot installer v0.14.0
 · Linking globally (npm link)
 ✓ Linked into C:\Users\you\AppData\Roaming\npm\deckpilot.cmd
 · Smoke test
-✓ deckpilot/0.14.0 win32-x64 node-v22.11.0
+✓ deckpilot/0.14.5 win32-x64 node-v22.11.0
 · Running deckpilot doctor
 ✓ Node ≥ 20 — node v22.11.0
-✓ GitHub token resolvable — source: env COPILOT_GITHUB_TOKEN
+✓ GitHub token resolvable — source: ...
 ✓ cwd writable — C:\Users\you
 ✓ Copilot SDK reachable — ping ok at ...
 ✓ Visual critique pipeline — C:\Users\you\scoop\apps\libreoffice\current\program\soffice.exe + C:\Users\you\scoop\apps\poppler\current\bin\pdftoppm.exe
 
 DeckPilot is ready.
+  Source:      C:\Users\you\.deckpilot\repo
+  Install log: C:\Users\you\.deckpilot\install.log
+  Try: deckpilot            # open the menu
+       deckpilot auth login # if you haven't authenticated Copilot CLI yet
+```
+
+## Verifying the install worked
+
+```powershell
+# In a NEW PowerShell window (so PATH refreshes from the npm link)
+deckpilot --version
+deckpilot doctor
+deckpilot                  # opens the TUI menu
+```
+
+If `deckpilot` opens a menu titled "DeckPilot · conversational PowerPoint…"
+with rows like "Start a new deck / Resume a deck / Manage projects /
+Manage templates / Settings / Help / Quit", you're fully shipped.
+
+If `deckpilot --version` reports "not recognized", open a new shell — npm's
+global bin needs PATH to refresh. If still missing:
+
+```powershell
+$env:Path = "$([Environment]::GetEnvironmentVariable('Path','User'));$env:APPDATA\npm"
+deckpilot --version
 ```
 
 ## Parameters
@@ -304,7 +330,7 @@ DeckPilot is ready.
 | `-NoBuild` | Skip the TypeScript build (dev re-link). |
 | `-Quiet` | Minimal console output (the install log captures the detail). |
 | `-Log <path>` | Override the install log location. Default: `$HOME\.deckpilot\install.log`. |
-| `-Uninstall` | Remove the symlink + (if bootstrapped) the clone. Doesn't touch projects/templates. |
+| `-Uninstall` | Remove the symlink + (if bootstrapped) the install dir. Doesn't touch projects/templates. |
 
 ## Environment variables
 
@@ -312,10 +338,10 @@ Same as `install.sh`:
 
 | Var | Purpose |
 |---|---|
-| `DECKPILOT_INSTALL_DIR` | Clone target. Default `%USERPROFILE%\.deckpilot\repo`. |
-| `DECKPILOT_REPO_URL` | Primary git URL. |
-| `DECKPILOT_REPO_MIRRORS` | Comma-separated fallback mirrors. |
-| `DECKPILOT_REF` | Git ref (branch/tag/SHA). |
+| `DECKPILOT_INSTALL_DIR` | Where to extract the source. Default `%USERPROFILE%\.deckpilot\repo`. |
+| `DECKPILOT_REPO_URL` | Primary GitHub URL (used to derive the zip URL). |
+| `DECKPILOT_REPO_MIRRORS` | Comma-separated fallback GitHub URLs. |
+| `DECKPILOT_REF` | Branch / tag / SHA to download. Default `main`. |
 | `DECKPILOT_INSTALL_LOG` | Install log location. |
 
 ## Package manager reference
@@ -325,7 +351,6 @@ scoop is the recommended path. The other columns are alternatives.
 | Dep | scoop (recommended) | winget | choco |
 |---|---|---|---|
 | **Node.js LTS** | `scoop install nodejs-lts` | `winget install OpenJS.NodeJS.LTS` | `choco install -y nodejs-lts` |
-| **git** | `scoop install git` | `winget install Git.Git` | `choco install -y git` |
 | **LibreOffice** | `scoop bucket add extras; scoop install libreoffice` | `winget install --id TheDocumentFoundation.LibreOffice --silent` | `choco install -y libreoffice-fresh` |
 | **poppler** | `scoop install poppler` | not available | `choco install -y poppler` |
 | **PowerShell 7** | `scoop install pwsh` | `winget install Microsoft.PowerShell` | `choco install -y powershell-core` |
@@ -333,98 +358,29 @@ scoop is the recommended path. The other columns are alternatives.
 DeckPilot's installer auto-detects all three; it just prefers scoop for
 poppler since it's the only fully-userspace option.
 
-## Uninstalling via scoop
-
-If you used scoop for everything, you can unwind cleanly:
-
-```powershell
-scoop uninstall poppler
-scoop uninstall libreoffice
-# (only if you want to remove them — Node and git are useful for other things)
-```
-
-To remove scoop itself entirely:
-
-```powershell
-scoop uninstall scoop
-Remove-Item -Recurse -Force $HOME\scoop
-```
-
-## poppler manual install (if you really don't want scoop)
-
-1. Download the latest release zip from
-   [oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases).
-2. Extract to `C:\poppler` (or anywhere else).
-3. Add `C:\poppler\Library\bin` (path varies by release) to your PATH:
-
-   ```powershell
-   [Environment]::SetEnvironmentVariable(
-     'Path',
-     "$([Environment]::GetEnvironmentVariable('Path','User'));C:\poppler\Library\bin",
-     'User'
-   )
-   ```
-
-4. Open a new terminal and verify:
-
-   ```powershell
-   pdftoppm -v
-   ```
-
-## LibreOffice manual install (if you really don't want scoop)
-
-1. Download the Windows installer from
-   [libreoffice.org/download](https://www.libreoffice.org/download/download/).
-2. Run the MSI; accept the defaults.
-3. Verify:
-
-   ```powershell
-   Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
-   ```
-
-DeckPilot finds `soffice.exe` at this path automatically — no need to add
-LibreOffice to PATH.
-
-## Fully manual install (skip install.ps1 entirely)
-
-If `iwr | iex` doesn't work in your environment (e.g. heavy corporate TLS
-inspection), do every step by hand:
-
-```powershell
-# 1. Clone
-git clone https://github.com/marinoscar/deckpilot.git $HOME\.deckpilot\repo
-
-# 2. Build
-cd $HOME\.deckpilot\repo
-npm ci
-npm run build
-npx oclif manifest
-
-# 3. Link
-npm link
-
-# 4. Verify
-deckpilot --version
-deckpilot doctor
-```
-
 ## Update flow
 
 The installer auto-detects re-runs on an existing install:
 
-- Preflight: only checks Node / npm (skips disk / network / deps re-detect).
-- Bootstrap: `git fetch` + `git reset --hard origin/<ref>` (no re-clone).
-- Build: `npm ci` only if `package-lock.json` actually changed; otherwise
-  straight to `npm run build`.
-- Link: skipped.
-- Verify: `deckpilot doctor` still runs.
+- **Preflight:** only checks Node / npm (skips disk / network / deps re-detect).
+- **Bootstrap:** existing `$RepoDir` is renamed to `$RepoDir.backup`, then
+  the latest zip is downloaded and extracted into a fresh `$RepoDir`. The
+  previous `node_modules` is moved across into the new dir if it exists.
+- **Build:** `npm ci` runs only if `package-lock.json` actually changed
+  (SHA1 hash compared between old and new); otherwise straight to
+  `npm run build`.
+- **Link:** skipped.
+- **Verify:** `deckpilot doctor` still runs.
+- **Cleanup:** `$RepoDir.backup` is removed on success. On any failure,
+  the backup is restored to the original location.
 
 Force the full path with `-Reinstall`.
 
 ## Uninstall DeckPilot
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 | iex -Args '-Uninstall'
+iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -Uninstall
 ```
 
 or from a local clone:
@@ -433,8 +389,8 @@ or from a local clone:
 .\install.ps1 -Uninstall
 ```
 
-This unlinks the global binary and removes the bootstrap clone (if any). It
-does **NOT** touch:
+This unlinks the global binary and removes the bootstrap install dir (if
+any). It does **NOT** touch:
 
 - Your Copilot CLI auth under `%USERPROFILE%\.copilot\`
 - Your saved DeckPilot projects + templates under
@@ -447,17 +403,123 @@ To wipe DeckPilot's persistent state too:
 Remove-Item -Recurse -Force $HOME\.deckpilot
 ```
 
+## Corporate / locked-down machines
+
+Almost every install issue on a managed Windows box traces back to one of
+three things: TLS interception, stale CDN cache, or a UAC / execution
+policy block. Here's the playbook we've worked out.
+
+### TLS interception — diagnosing it
+
+Corporate networks often run TLS-inspecting proxies (Zscaler, Netskope,
+Cisco Umbrella, Palo Alto, etc.) that re-sign HTTPS traffic with their own
+root CA. The Windows certificate store trusts that root (IT installs it
+system-wide), so:
+
+- **PowerShell `Invoke-WebRequest` works** — it uses Schannel + the
+  Windows cert store.
+- **`git clone` may fail** — Git for Windows defaults to OpenSSL with its
+  own bundled CA file, which does NOT have the corporate root.
+- **`scoop install foo` may fail** at the download step for the same
+  reason if scoop is shelling out to a tool that uses its own cert store.
+
+Quick test to confirm Schannel works for HTTPS to GitHub:
+
+```powershell
+iwr -useb -Method Head https://github.com >$null
+echo "github.com reachable via Schannel"
+```
+
+If that succeeds, **install.ps1 will work** — it uses the same transport.
+The DeckPilot installer no longer needs `git clone` at all.
+
+### Stale CDN cache for raw.githubusercontent.com
+
+Corporate proxies often cache content by **URL path only**, ignoring
+query strings. So `iwr ...install.ps1?nc=$(Get-Random)` gets served from
+cache even though the URL is technically unique. To bust the cache,
+**use a commit SHA in the URL** — the proxy can't have it cached because
+the URL is genuinely new:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/<commit-sha>/install.ps1 -OutFile install.ps1
+```
+
+Find the latest commit SHA from the
+[releases page](https://github.com/marinoscar/deckpilot/commits/main) or
+just visit the repo and copy the short SHA from a recent commit.
+
+If even the SHA-URL gets served stale, try the codeload mirror (different
+CDN path):
+
+```powershell
+iwr -useb https://github.com/marinoscar/deckpilot/raw/<sha>/install.ps1 -OutFile install.ps1
+```
+
+### When `iwr | iex` closes the window before you can read the error
+
+PowerShell's `iex` runs the script body **inside your current session**,
+so any `exit` call terminates the host. v0.14.2+ uses `throw` to surface
+errors without closing the session, but the safer habit is to download
+the script to disk first and run from there:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -NoInstallDeps
+```
+
+Errors land in the terminal, the window stays open, and you can also
+inspect the install log afterwards.
+
+### The install log
+
+Always available, always per-run truncated, always populated even on
+failure:
+
+```powershell
+Get-Content $HOME\.deckpilot\install.log
+```
+
+If you hit something the script doesn't surface clearly, the log usually
+has the underlying error. Common things to look for:
+
+- `npm warn` lines — usually harmless. v0.14.5+ doesn't fail on them.
+- `npm error` lines — real failure; the surrounding lines say why.
+- `Expand-Archive` errors — partial / corrupt download. Re-run.
+- Anything with `OpenSSL` / `SSL` / `certificate` / `verify` — TLS
+  interception. Schannel-based downloads (the installer's path) should
+  side-step this; if you see it from another tool, that tool is using
+  OpenSSL.
+
 ## Troubleshooting
 
 **"running scripts is disabled on this system"**
 Run the one-time `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`.
 
+**The PowerShell window closes on error**
+Download the installer to disk first instead of piping into `iex`:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -NoInstallDeps
+```
+
+**Wrong installer version even after re-running the download**
+Your corporate proxy is caching by URL path. Pin to a specific commit
+SHA: see [Stale CDN cache](#stale-cdn-cache-for-rawgithubusercontentcom).
+
+**Garbled symbols where the installer shows `·`, `✓`, `✗`**
+You're running an older version (pre-v0.14.3) under PowerShell 5.1.
+Re-download the latest `install.ps1` — the file now has a UTF-8 BOM
+and uses literal characters instead of the PS 7+ `` `u{...} `` escape.
+
 **`scoop` install fails with TLS / certificate errors**
-You're likely on a corporate network with TLS inspection. Either ask IT
-for the root CA certificate and add it to the Windows Trusted Root
-Certification Authorities store (`certmgr.msc`), or use winget for
-LibreOffice and the [manual poppler install](#poppler-manual-install-if-you-really-dont-want-scoop)
-above.
+Same root cause as Git for Windows — scoop's downloader uses OpenSSL.
+Easier fix: use `winget` for the things scoop would install
+(LibreOffice via `winget install --id TheDocumentFoundation.LibreOffice
+--silent`, Node via `winget install OpenJS.NodeJS.LTS`). For poppler,
+fall back to the
+[manual install](#poppler-manual-install-if-you-really-dont-want-scoop).
 
 **`scoop` install fails with execution-policy error**
 Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` first.
@@ -483,18 +545,106 @@ produces decks without it.
 **`deckpilot doctor` says "pdftoppm missing"**
 Install poppler (`scoop install poppler`).
 
-**TLS errors during `git clone`**
-You're likely on a corporate network with TLS inspection. Ask IT for the
-root CA certificate and add it to the Windows Trusted Root Certification
-Authorities store (`certmgr.msc`). Git on Windows uses the system store
-by default, so this fixes it for both git and curl-equivalents.
+**`deckpilot doctor` says "Copilot SDK reachable ✗"**
+Run `deckpilot auth login`. Most fresh installs need this once.
+
+**Install fails at `npm warn ...` line**
+Update to v0.14.5+. Earlier versions treated any native-command stderr
+(including npm warnings) as a fatal error.
+
+**Install fails at `git clone`**
+Update to v0.14.4+. The installer no longer uses git.
 
 **Want to run from a fork or branch**
 
 ```powershell
-$env:DECKPILOT_REF = 'v0.13.0'         # tag
+$env:DECKPILOT_REF = 'v0.14.4'         # tag
 $env:DECKPILOT_REF = 'feature/foo'     # branch
 .\install.ps1
+```
+
+## Uninstalling scoop-installed deps
+
+If you used scoop for everything, you can unwind cleanly:
+
+```powershell
+scoop uninstall poppler
+scoop uninstall libreoffice
+# (only if you want to remove them — Node is useful for other things)
+```
+
+To remove scoop itself entirely:
+
+```powershell
+scoop uninstall scoop
+Remove-Item -Recurse -Force $HOME\scoop
+```
+
+## Manual install paths
+
+### poppler manual install (if you really don't want scoop)
+
+1. Download the latest release zip from
+   [oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases).
+2. Extract to `C:\poppler` (or anywhere else).
+3. Add `C:\poppler\Library\bin` (path varies by release) to your PATH:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable(
+     'Path',
+     "$([Environment]::GetEnvironmentVariable('Path','User'));C:\poppler\Library\bin",
+     'User'
+   )
+   ```
+
+4. Open a new terminal and verify:
+
+   ```powershell
+   pdftoppm -v
+   ```
+
+### LibreOffice manual install (if you really don't want scoop)
+
+1. Download the Windows installer from
+   [libreoffice.org/download](https://www.libreoffice.org/download/download/).
+2. Run the MSI; accept the defaults.
+3. Verify:
+
+   ```powershell
+   Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
+   ```
+
+DeckPilot finds `soffice.exe` at this path automatically — no need to add
+LibreOffice to PATH.
+
+### Fully manual install (skip install.ps1 entirely)
+
+If `iwr | iex` doesn't work in your environment and you don't want to use
+the script at all, do every step by hand. No git required:
+
+```powershell
+# 1. Download the tarball (Schannel works on corporate boxes; git clone may not)
+iwr -useb https://github.com/marinoscar/deckpilot/archive/refs/heads/main.zip `
+    -OutFile $env:TEMP\deckpilot.zip
+
+# 2. Extract
+$dest = "$HOME\.deckpilot"
+if (Test-Path "$dest\repo") { Remove-Item -Recurse -Force "$dest\repo" }
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+Expand-Archive -Path $env:TEMP\deckpilot.zip -DestinationPath $dest -Force
+Rename-Item -Path "$dest\deckpilot-main" -NewName "repo"
+
+# 3. Build + link
+Push-Location "$dest\repo"
+npm ci
+npm run build
+npx oclif manifest
+npm link
+Pop-Location
+
+# 4. Verify (open a new shell so PATH refreshes)
+deckpilot --version
+deckpilot doctor
 ```
 
 ## What's the same as Linux / macOS
@@ -509,7 +659,8 @@ $env:DECKPILOT_REF = 'feature/foo'     # branch
 
 ## What's different from Linux / macOS
 
-- The installer is `install.ps1`, not `install.sh`.
+- The installer is `install.ps1` (zip download), not `install.sh`
+  (git clone). git is not a Windows prerequisite.
 - LibreOffice and poppler aren't on PATH by default after install
   (especially when installed via scoop). DeckPilot probes their standard
   install locations as a fallback.
