@@ -4,7 +4,19 @@ DeckPilot supports Windows natively as of v0.14 — no WSL required. This
 document covers the native Windows install path. (For WSL/Linux/macOS see
 [INSTALL.md](INSTALL.md).)
 
-## TL;DR
+## Two ways to install
+
+You can either:
+
+- **All-in-one** — run the installer and let it offer to install missing
+  system deps with a `[y/N]` prompt. See [Quick install](#quick-install).
+- **Step-by-step** — verify what's already installed, install any missing
+  deps manually, then run the installer with `-NoInstallDeps`. See
+  [Recommended workflow](#recommended-workflow-step-by-step). Better on
+  corporate / locked-down machines where you want to know exactly what's
+  being touched.
+
+## Quick install
 
 Open **PowerShell** (5.1 that ships with Windows is fine; 7+ is better) and:
 
@@ -16,50 +28,218 @@ That runs the installer non-interactively. Re-running it later auto-detects
 the existing install and switches into a fast update path (fetch + rebuild
 only).
 
+If you'd rather do every step yourself, skip down to
+[Recommended workflow](#recommended-workflow-step-by-step).
+
 ## Prerequisites
 
 | | |
 |---|---|
 | **Windows 10 22H2+ or Windows 11** | Older Windows lacks `winget`. |
-| **PowerShell 5.1+** | Ships with Windows. PowerShell 7+ is recommended ([install via winget](#installing-prerequisites-via-winget)). |
-| **Node.js ≥ 20** | Install via `winget install OpenJS.NodeJS.LTS` or [nodejs.org](https://nodejs.org). |
-| **git** | Install via `winget install Git.Git`. |
+| **PowerShell 5.1+** | Ships with Windows. PowerShell 7+ is recommended ([install via winget](#installing-powershell-7-optional)). |
+| **Node.js ≥ 20** | Required. Install via `winget install OpenJS.NodeJS.LTS` or [nodejs.org](https://nodejs.org). |
+| **git** | Required for the bootstrap clone. Install via `winget install Git.Git`. |
 | **GitHub Copilot subscription** | Required at *runtime* (not install). |
-| **LibreOffice + poppler** (recommended) | For the vision-driven template extractor and the visual critique loop. The installer offers to install them automatically when a supported package manager is detected. |
+| **LibreOffice + poppler** | Recommended. Powers vision-driven `template create --from <pptx>` and the visual critique loop. DeckPilot still installs without them — affected features fall back. |
 
-## One-time setup: execution policy
+## Recommended workflow (step-by-step)
 
-Windows blocks running unsigned `.ps1` scripts by default. To enable script
+This is the **conservative path**: verify what's installed first, install any
+missing deps manually, then run the installer telling it not to touch the
+system.
+
+### Step 1 — Verify your environment
+
+Open PowerShell and run each of these. Anything that doesn't return what's
+expected goes into Step 2.
+
+#### Node.js ≥ 20
+
+```powershell
+node --version       # should print v20.x.x or higher (v22.x recommended)
+npm --version        # should print 10.x or higher
+```
+
+If `node` reports "not recognized" or prints v18 or older, install in Step 2.
+
+#### git
+
+```powershell
+git --version        # should print "git version 2.x.x.windows.x" or similar
+```
+
+#### PowerShell version
+
+```powershell
+$PSVersionTable.PSVersion    # 5.1 is fine; 7.x is better
+```
+
+#### LibreOffice
+
+LibreOffice usually isn't on `PATH` by default, so check by binary path:
+
+```powershell
+Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
+# OR (32-bit install location):
+Test-Path 'C:\Program Files (x86)\LibreOffice\program\soffice.exe'
+```
+
+If one returns `True`, you have it. To confirm it actually runs:
+
+```powershell
+& 'C:\Program Files\LibreOffice\program\soffice.exe' --version
+```
+
+DeckPilot probes both locations automatically — you do **not** need to add
+LibreOffice to `PATH`.
+
+#### poppler / pdftoppm
+
+```powershell
+Get-Command pdftoppm -ErrorAction SilentlyContinue
+# OR explicit version probe:
+pdftoppm -v
+```
+
+`pdftoppm` writes its version to stderr; if you see something like
+`pdftoppm version 23.x.x ...` you have it.
+
+#### Package managers (winget / scoop / choco)
+
+```powershell
+Get-Command winget, scoop, choco -ErrorAction SilentlyContinue
+```
+
+You need at least **one** for Step 2's automated install commands to work.
+`winget` ships with Windows 11 and recent Windows 10. `scoop` and `choco`
+are user-installed.
+
+### Step 2 — Install missing prerequisites
+
+Only run the lines for things that came up missing in Step 1.
+
+#### Install Node 22 LTS
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+After it finishes, **close your terminal and open a new one** so `PATH`
+picks up Node. Then re-verify:
+
+```powershell
+node --version       # v22.x.x
+npm --version
+```
+
+#### Install git
+
+```powershell
+winget install Git.Git
+```
+
+Open a new terminal. Re-verify:
+
+```powershell
+git --version
+```
+
+#### Install LibreOffice (recommended)
+
+```powershell
+winget install --id TheDocumentFoundation.LibreOffice --silent
+```
+
+Re-verify (no need to open a new terminal — DeckPilot probes the install
+path directly):
+
+```powershell
+Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
+& 'C:\Program Files\LibreOffice\program\soffice.exe' --version
+```
+
+> winget does not have poppler. Install it via scoop or chocolatey below.
+
+#### Install poppler (recommended)
+
+If you have **scoop**:
+
+```powershell
+scoop install poppler
+```
+
+If you have **chocolatey** (admin shell):
+
+```powershell
+choco install -y poppler
+```
+
+If you have **neither**, the lightest option is to install scoop first:
+
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+iwr -useb get.scoop.sh | iex
+scoop install poppler
+```
+
+Re-verify in a new terminal:
+
+```powershell
+pdftoppm -v
+```
+
+#### Installing PowerShell 7 (optional)
+
+PS 7+ has much better terminal handling than PS 5.1 — the ink TUI looks nicer:
+
+```powershell
+winget install Microsoft.PowerShell
+```
+
+Then launch `pwsh` instead of `powershell` going forward.
+
+### Step 3 — Allow PowerShell scripts to run
+
+If you'll run `install.ps1` from disk (not via `iwr | iex`), enable script
 execution for your user once:
 
 ```powershell
 Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-Or bypass per-invocation:
+The `iwr | iex` one-liner doesn't trip the execution-policy guard because
+the script is piped, not loaded from disk.
+
+### Step 4 — Run the installer
+
+Now that all the system deps are in place, run the installer with
+`-NoInstallDeps` so it skips the system-dep prompt and just installs
+DeckPilot itself:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 | iex -Args '-NoInstallDeps'
 ```
 
-The `iwr | iex` one-liner doesn't trip the execution-policy guard because the
-script is piped, not executed from disk.
-
-## Installing prerequisites via winget
-
-If you don't yet have Node, git, or PowerShell 7+:
+Or, if you'd rather have the script on disk first (lets you read it):
 
 ```powershell
-winget install OpenJS.NodeJS.LTS          # Node 22 LTS
-winget install Git.Git                    # git
-winget install Microsoft.PowerShell       # PowerShell 7 (optional; PS 5.1 works)
+iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -NoInstallDeps
 ```
 
-Restart your terminal after `node` is installed so PATH picks it up.
+The installer will:
 
-## What the installer does
+1. Preflight Node ≥ 20, git, disk space, and network reachability to github.com.
+2. Skip the system-dep prompt (because of `-NoInstallDeps`).
+3. Clone DeckPilot to `%USERPROFILE%\.deckpilot\repo`.
+4. Run `npm ci` + `npm run build` + `npx oclif manifest`.
+5. Link `deckpilot` globally via `npm link`.
+6. Run `deckpilot doctor` and stream its output — your final verification.
 
-The same flow as the Linux installer:
+If `deckpilot doctor` shows green checks across the board, you're done.
+Run `deckpilot` to open the menu.
+
+## What the installer prints
 
 ```
 DeckPilot installer v0.14.0
@@ -67,14 +247,6 @@ DeckPilot installer v0.14.0
 ✓ Node v22.11.0
 ✓ Disk: 88420 MB free on drive C:
 ✓ Network: github.com reachable
-! Missing visual-pipeline deps: libreoffice, poppler
-· System dependencies
-  Detected package manager(s): winget, scoop
-  Plan:
-    winget install --id TheDocumentFoundation.LibreOffice --silent
-    scoop install poppler
-Install libreoffice, poppler now? [y/N] y
-  [output streams here]
 ✓ Visual pipeline deps present (LibreOffice + pdftoppm)
 · Cloning https://github.com/marinoscar/deckpilot.git@main → C:\Users\you\.deckpilot\repo
 ✓ Cloned
@@ -106,7 +278,7 @@ DeckPilot is ready.
 | `-Update` | Force the update fast-path (auto-detected by default on re-run). |
 | `-Reinstall` | Skip auto-update detection; run the full path on an existing install. |
 | `-InstallDeps` | Install missing system deps without the `[y/N]` prompt. |
-| `-NoInstallDeps` | Never auto-install system deps; just print the exact command. |
+| `-NoInstallDeps` | Never auto-install system deps; just print the exact command. Use this when you've installed deps yourself in Step 2. |
 | `-SkipDoctor` | Skip the final `deckpilot doctor` verification. |
 | `-NoBuild` | Skip the TypeScript build (dev re-link). |
 | `-Quiet` | Minimal console output (the install log captures the detail). |
@@ -125,68 +297,76 @@ Same as `install.sh`:
 | `DECKPILOT_REF` | Git ref (branch/tag/SHA). |
 | `DECKPILOT_INSTALL_LOG` | Install log location. |
 
-## Package manager detection
-
-The installer prefers in this order:
+## Package manager reference
 
 | Dep | winget | scoop | choco |
 |---|---|---|---|
 | **LibreOffice** | `winget install --id TheDocumentFoundation.LibreOffice --silent` | `scoop bucket add extras; scoop install libreoffice` | `choco install -y libreoffice-fresh` |
 | **poppler** | not available | `scoop install poppler` | `choco install -y poppler` |
+| **Node.js** | `winget install OpenJS.NodeJS.LTS` | `scoop install nodejs-lts` | `choco install -y nodejs-lts` |
+| **git** | `winget install Git.Git` | `scoop install git` | `choco install -y git` |
 
-`winget` ships with Windows 11 (and Windows 10 22H2+ with the App Installer
-update). `scoop` and `choco` are user-installed. If you have none, the
-installer falls through to a hint listing manual download links.
-
-Quick scoop install (PowerShell):
-
-```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-iwr -useb get.scoop.sh | iex
-```
-
-## LibreOffice on Windows — adding it to PATH
-
-By default the LibreOffice MSI installer does **not** add `soffice.exe` to
-PATH. DeckPilot still finds it via fallback paths
-(`C:\Program Files\LibreOffice\program\soffice.exe` and the (x86) variant),
-so this usually doesn't matter.
-
-If you want it on PATH explicitly:
-
-```powershell
-[Environment]::SetEnvironmentVariable(
-  'Path',
-  "$([Environment]::GetEnvironmentVariable('Path','User'));C:\Program Files\LibreOffice\program",
-  'User'
-)
-```
-
-Open a new terminal afterwards.
-
-## poppler on Windows — manual install (if no package manager)
+## poppler manual install (if no package manager)
 
 1. Download the latest release zip from
    [oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases).
 2. Extract to `C:\poppler` (or anywhere else).
-3. Add `C:\poppler\Library\bin` (path varies by release) to your PATH.
-4. Verify with `pdftoppm -v` in a new shell.
+3. Add `C:\poppler\Library\bin` (path varies by release) to your PATH:
 
-## Manual install (if `iwr | iex` doesn't work)
+   ```powershell
+   [Environment]::SetEnvironmentVariable(
+     'Path',
+     "$([Environment]::GetEnvironmentVariable('Path','User'));C:\poppler\Library\bin",
+     'User'
+   )
+   ```
+
+4. Open a new terminal and verify:
+
+   ```powershell
+   pdftoppm -v
+   ```
+
+## LibreOffice manual install (if no winget)
+
+1. Download the Windows installer from
+   [libreoffice.org/download](https://www.libreoffice.org/download/download/).
+2. Run the MSI; accept the defaults.
+3. Verify the install location:
+
+   ```powershell
+   Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
+   ```
+
+DeckPilot finds `soffice.exe` at this path automatically — no need to add
+LibreOffice to PATH.
+
+## Fully manual install (skip install.ps1 entirely)
+
+If `iwr | iex` doesn't work in your environment (e.g. heavy corporate TLS
+inspection), do every step by hand:
 
 ```powershell
+# 1. Clone
 git clone https://github.com/marinoscar/deckpilot.git $HOME\.deckpilot\repo
+
+# 2. Build
 cd $HOME\.deckpilot\repo
 npm ci
 npm run build
 npx oclif manifest
+
+# 3. Link
 npm link
+
+# 4. Verify
+deckpilot --version
 deckpilot doctor
 ```
 
 ## Update flow
 
-The installer auto-detects when you re-run it on an existing install:
+The installer auto-detects re-runs on an existing install:
 
 - Preflight: only checks Node / npm (skips disk / network / deps re-detect).
 - Bootstrap: `git fetch` + `git reset --hard origin/<ref>` (no re-clone).
@@ -213,7 +393,9 @@ This unlinks the global binary and removes the bootstrap clone (if any). It
 does **NOT** touch:
 
 - Your Copilot CLI auth under `%USERPROFILE%\.copilot\`
-- Your saved DeckPilot projects + templates under `%USERPROFILE%\.deckpilot\projects\` and `%USERPROFILE%\.deckpilot\templates\`
+- Your saved DeckPilot projects + templates under
+  `%USERPROFILE%\.deckpilot\projects\` and
+  `%USERPROFILE%\.deckpilot\templates\`
 
 To wipe DeckPilot's persistent state too:
 
