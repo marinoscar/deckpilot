@@ -1,6 +1,6 @@
 {
   "name": "deckpilot",
-  "version": "0.14.5",
+  "version": "0.14.6",
   "description": "Conversational CLI that turns chat into polished PowerPoint decks, powered by the GitHub Copilot SDK.",
   "license": "MIT",
   "type": "module",

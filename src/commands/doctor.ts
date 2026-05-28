@@ -1,4 +1,5 @@
 import { constants, accessSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import which from 'which';
 import { BaseCommand } from '../cli/base-command.js';
@@ -33,13 +34,22 @@ export default class Doctor extends BaseCommand {
     });
 
     const token = resolveGitHubToken();
+    // The Copilot SDK falls back to the Copilot CLI's keychain when no
+    // explicit GitHub token is on env. Detect that fallback by probing for
+    // ~/.copilot (Linux/macOS/WSL) OR %USERPROFILE%\.copilot (Windows).
+    // Pre-v0.14.6 used process.env.HOME, which is unset on Windows — so the
+    // check incorrectly reported missing even after `copilot login`.
+    const copilotKeychainDir = join(homedir(), '.copilot');
+    const hasCopilotKeychain = existsSync(copilotKeychainDir);
     checks.push({
       name: 'GitHub token resolvable',
-      ok: token.source !== 'none' || existsSync(join(process.env.HOME ?? '', '.copilot')),
-      detail: `source: ${describeTokenSource(token.source)}`,
+      ok: token.source !== 'none' || hasCopilotKeychain,
+      detail: hasCopilotKeychain && token.source === 'none'
+        ? `source: copilot CLI keychain at ${copilotKeychainDir}`
+        : `source: ${describeTokenSource(token.source)}`,
       hint:
-        token.source === 'none'
-          ? 'Run `deckpilot auth login` to start the device-flow login.'
+        token.source === 'none' && !hasCopilotKeychain
+          ? 'Run `deckpilot auth login` (or `copilot login`) to start the device-flow login.'
           : undefined,
     });
 
