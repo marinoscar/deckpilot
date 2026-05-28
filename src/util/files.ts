@@ -1,5 +1,5 @@
 import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 export type FileEntry = {
   /** Path relative to cwd (or absolute if outside cwd). */
@@ -59,8 +59,11 @@ async function walk(
     if (!INTERESTING.test(e.name)) continue;
     try {
       const st = await stat(full);
+      // path.sep — `/` on Linux/macOS, `\` on Windows. Hard-coding `/` here
+      // would mean Windows paths never match the prefix and we'd return the
+      // absolute path instead of the cwd-relative one.
       out.push({
-        path: full.startsWith(root + '/') ? full.slice(root.length + 1) : full,
+        path: full.startsWith(root + sep) ? full.slice(root.length + sep.length) : full,
         name: e.name,
         kind: classify(e.name),
         mtime: st.mtimeMs,
