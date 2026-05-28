@@ -26,7 +26,7 @@ Have a normal conversation in your terminal — DeckPilot proposes the outline, 
 curl -fsSL https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.sh | bash
 ```
 
-This clones DeckPilot into `~/.deckpilot/repo`, installs deps, builds, and links the `deckpilot` binary onto your `PATH`. Re-run any time — it's idempotent.
+This clones DeckPilot into `~/.deckpilot/repo`, installs deps, builds, links the `deckpilot` binary onto your `PATH`, **offers to install LibreOffice + poppler-utils** (the visual pipeline deps), and runs `deckpilot doctor` at the end to verify the install end-to-end. Re-running it is safe — it auto-detects existing installs and switches into a fast update path (fetch + rebuild only).
 
 ### From a git clone
 
@@ -40,10 +40,20 @@ cd deckpilot
 
 | Flag | What it does |
 |---|---|
-| `--system` | Install system-wide by symlinking `/usr/local/bin/deckpilot` (uses `sudo`). Default is per-user via `npm link`. |
-| `--no-build` | Skip the TypeScript build — useful when re-linking during dev. |
-| `--uninstall` | Remove the symlink and the bootstrap clone. |
-| `--quiet` | Minimal output. |
+| `--system` | Install system-wide via `/usr/local/bin` (uses `sudo`). Default is per-user via `npm link`. |
+| `--update` | Force the update fast-path (auto-detected by default when re-running). |
+| `--reinstall` | Skip auto-update detection; run the full path on an existing install. |
+| `--install-deps` | Install missing system deps without the `[y/N]` prompt (still requires sudo). |
+| `--no-install-deps` | Never auto-install system deps; just print the exact command for the detected platform. |
+| `--skip-doctor` | Skip the final `deckpilot doctor` verification. |
+| `--no-build` | Skip the TypeScript build (dev re-link). |
+| `--quiet` | Minimal output. The install log captures the detail. |
+| `--log <path>` | Override the install log location. Default: `~/.deckpilot/install.log`. |
+| `--uninstall` | Remove the symlink + (if bootstrapped) the clone. Doesn't touch projects/templates. |
+
+Auto-detected platforms (for both deps install and hint mode): `apt` (Ubuntu/Debian/WSL), `dnf` (Fedora/RHEL), `pacman` (Arch/Manjaro), `zypper` (openSUSE), `brew` (macOS).
+
+See [docs/INSTALL.md](docs/INSTALL.md) for the full reference — env vars, manual installs, mirror fallback, resilience, troubleshooting.
 
 ### Override the install location
 
@@ -52,7 +62,7 @@ DECKPILOT_INSTALL_DIR=/opt/deckpilot \
   curl -fsSL https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.sh | bash
 ```
 
-Other env vars: `DECKPILOT_REPO_URL` (fork support), `DECKPILOT_REF` (branch or tag).
+Other env vars: `DECKPILOT_REPO_URL` (fork support), `DECKPILOT_REPO_MIRRORS` (csv of fallback mirrors), `DECKPILOT_REF` (branch or tag), `DECKPILOT_INSTALL_LOG`.
 
 ### Installing Node 20+ on a fresh Ubuntu box
 
