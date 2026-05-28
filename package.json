@@ -1,6 +1,6 @@
 {
   "name": "deckpilot",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Conversational CLI that turns chat into polished PowerPoint decks, powered by the GitHub Copilot SDK.",
   "license": "MIT",
   "type": "module",
@@ -33,11 +33,13 @@
     "@oclif/core": "^4.11.4",
     "@oclif/plugin-autocomplete": "^3.2.0",
     "@oclif/plugin-help": "^6.2.0",
+    "@types/which": "^3.0.4",
     "fast-xml-parser": "^4.5.0",
     "ink": "^7.0.4",
     "jszip": "^3.10.1",
     "pptxgenjs": "^4.0.1",
     "react": "^19.2.0",
+    "which": "^4.0.0",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.24.0"
   },

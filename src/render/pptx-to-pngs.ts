@@ -13,8 +13,32 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import which from 'which';
 
 const exec = promisify(execFile);
+
+/**
+ * Standard install locations to probe when the binary isn't on PATH. The
+ * LibreOffice installer on Windows does NOT add `soffice.exe` to PATH by
+ * default; macOS Homebrew puts it under /opt/homebrew on Apple Silicon.
+ */
+const SOFFICE_FALLBACKS = [
+  // Windows
+  'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+  'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
+  // macOS — both the .app bundle and brew-installed paths
+  '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+  '/opt/homebrew/bin/soffice',
+  '/usr/local/bin/soffice',
+];
+
+const PDFTOPPM_FALLBACKS = [
+  // Windows — common locations after `scoop install poppler` / manual zip extract
+  'C:\\ProgramData\\chocolatey\\bin\\pdftoppm.exe',
+  // macOS / Homebrew
+  '/opt/homebrew/bin/pdftoppm',
+  '/usr/local/bin/pdftoppm',
+];
 
 export class PreviewUnavailableError extends Error {
   constructor(message: string) {
@@ -25,16 +49,28 @@ export class PreviewUnavailableError extends Error {
 
 let cachedBinary: string | null | undefined;
 
-/** Resolve which LibreOffice binary is on PATH, if any. */
+/**
+ * Resolve the absolute path of the LibreOffice binary if it's available
+ * anywhere — PATH first, then a small set of standard install locations
+ * for Windows / macOS where the installer doesn't always touch PATH.
+ *
+ * Cross-platform via the `which` npm package (handles `.exe` and PATHEXT).
+ */
 export async function findSofficeBinary(): Promise<string | null> {
   if (cachedBinary !== undefined) return cachedBinary;
   for (const candidate of ['soffice', 'libreoffice']) {
     try {
-      await exec('which', [candidate]);
-      cachedBinary = candidate;
-      return candidate;
+      const resolved = await which(candidate);
+      cachedBinary = resolved;
+      return resolved;
     } catch {
       // continue
+    }
+  }
+  for (const fallback of SOFFICE_FALLBACKS) {
+    if (existsSync(fallback)) {
+      cachedBinary = fallback;
+      return fallback;
     }
   }
   cachedBinary = null;
@@ -128,18 +164,23 @@ async function rasteriseViaPdf(
     throw new Error(`Expected ${pdfPath} after LibreOffice PDF conversion`);
   }
 
+  let pdftoppmBin: string;
   try {
-    await exec('which', ['pdftoppm']);
+    pdftoppmBin = await which('pdftoppm');
   } catch {
-    throw new PreviewUnavailableError(
-      '`pdftoppm` (poppler-utils) is required for the preview pipeline. On Ubuntu/WSL: sudo apt install poppler-utils.',
-    );
+    const fallback = PDFTOPPM_FALLBACKS.find((p) => existsSync(p));
+    if (!fallback) {
+      throw new PreviewUnavailableError(
+        '`pdftoppm` (poppler-utils) is required for the preview pipeline. On Ubuntu/WSL: sudo apt install poppler-utils. On macOS: brew install poppler. On Windows: scoop install poppler (or choco install poppler).',
+      );
+    }
+    pdftoppmBin = fallback;
   }
 
   const dpi = String(opts.dpi ?? 150);
   const slidePrefix = join(outDir, 'slide');
   try {
-    await exec('pdftoppm', ['-png', '-r', dpi, pdfPath, slidePrefix], {
+    await exec(pdftoppmBin, ['-png', '-r', dpi, pdfPath, slidePrefix], {
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024 * 50,
     });

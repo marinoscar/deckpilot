@@ -25,7 +25,7 @@ into a **fast update mode** when it detects an existing install.
 | **openSUSE** | Auto-detects `zypper`. |
 | **macOS** | Auto-detects `brew`. Install Homebrew first if missing. |
 | **WSL 2** | Treated as Linux + a small flag in the install log. |
-| **Windows native** | Not supported. Use WSL. |
+| **Windows native** | Supported as of v0.14 via [install.ps1](../install.ps1). See [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md). |
 
 ## Requirements
 

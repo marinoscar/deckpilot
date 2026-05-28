@@ -14,8 +14,8 @@ Have a normal conversation in your terminal — DeckPilot proposes the outline, 
 
 | | |
 |---|---|
-| **Ubuntu / Debian / WSL / macOS** | Native install supported. |
-| **Windows** | **WSL is required** — install [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install), open an Ubuntu shell, then use the Ubuntu instructions below. DeckPilot is a Node + Ink CLI; the Windows console alone is not a supported environment. |
+| **Ubuntu / Debian / WSL / Fedora / Arch / openSUSE / macOS** | Native install supported. |
+| **Windows (native)** | Supported as of v0.14. Open PowerShell and run `iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 \| iex`. See [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). For the best TUI experience use Windows Terminal + PowerShell 7+. WSL still works if you prefer it. |
 | **Node.js** | ≥ 20 (the installer will fail loudly if it's missing or too old). |
 | **GitHub Copilot subscription** | Required — DeckPilot drives `@github/copilot-sdk`, which talks to the Copilot CLI runtime and your Copilot entitlement. |
 | **LibreOffice + poppler-utils** (recommended) | Needed for two features: (1) the visual critique loop where the LLM sees its own slides, (2) vision-driven `template create --from brand.pptx`. On Ubuntu/WSL: `sudo apt install libreoffice poppler-utils`. macOS: `brew install --cask libreoffice && brew install poppler`. Without it, DeckPilot still renders decks — just run with `--critique-passes 0`. |

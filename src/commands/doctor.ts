@@ -1,12 +1,10 @@
-import { execFile } from 'node:child_process';
 import { constants, accessSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import which from 'which';
 import { BaseCommand } from '../cli/base-command.js';
 import { describeTokenSource, resolveGitHubToken } from '../copilot/auth.js';
 import { createClient } from '../copilot/client.js';
-
-const exec = promisify(execFile);
+import { findSofficeBinary } from '../render/pptx-to-pngs.js';
 
 type Check = {
   name: string;
@@ -79,31 +77,31 @@ export default class Doctor extends BaseCommand {
     });
 
     // Visual preview pipeline — soft check, doesn't block any other feature.
+    // findSofficeBinary checks PATH + a small list of standard install locations
+    // on Windows / macOS so the LibreOffice installer's "not on PATH by default"
+    // behaviour doesn't make doctor cry wolf.
+    const sofficePath = await findSofficeBinary();
     let previewOk = false;
     let previewDetail = '';
-    let previewBin = '';
-    for (const bin of ['soffice', 'libreoffice']) {
+    if (sofficePath) {
+      let pdftoppmPath: string | null = null;
       try {
-        await exec('which', [bin]);
-        previewBin = bin;
-        previewOk = true;
-        break;
+        pdftoppmPath = await which('pdftoppm');
       } catch {
-        // continue
+        // probe standard locations as a fallback
+        const fallbacks = [
+          'C:\\ProgramData\\chocolatey\\bin\\pdftoppm.exe',
+          '/opt/homebrew/bin/pdftoppm',
+          '/usr/local/bin/pdftoppm',
+        ];
+        pdftoppmPath = fallbacks.find((p) => existsSync(p)) ?? null;
       }
-    }
-    if (previewOk) {
-      let hasPdftoppm = false;
-      try {
-        await exec('which', ['pdftoppm']);
-        hasPdftoppm = true;
-      } catch {
-        hasPdftoppm = false;
-      }
-      previewDetail = `${previewBin} found${hasPdftoppm ? ' + pdftoppm' : ' (pdftoppm missing — needed for per-slide PNGs)'}`;
-      previewOk = hasPdftoppm;
+      previewDetail = pdftoppmPath
+        ? `${sofficePath} + ${pdftoppmPath}`
+        : `${sofficePath} (pdftoppm missing — needed for per-slide PNGs)`;
+      previewOk = pdftoppmPath !== null;
     } else {
-      previewDetail = 'libreoffice not on $PATH';
+      previewDetail = 'libreoffice not found on PATH or in standard install locations';
     }
     checks.push({
       name: 'Visual critique pipeline',
@@ -112,7 +110,7 @@ export default class Doctor extends BaseCommand {
       soft: true,
       hint: previewOk
         ? undefined
-        : 'The visual critique loop needs LibreOffice + poppler-utils. On Ubuntu/WSL: sudo apt install libreoffice poppler-utils. DeckPilot still works without it — just run with --critique-passes 0.',
+        : platformInstallHint(),
     });
 
     for (const c of checks) {
@@ -125,5 +123,19 @@ export default class Doctor extends BaseCommand {
     // Soft checks don't fail the exit; only hard failures do.
     const allHardOk = checks.every((c) => c.ok || c.soft);
     if (!allHardOk) this.exit(1);
+  }
+}
+
+/** Platform-appropriate install hint for the LibreOffice + poppler pair. */
+function platformInstallHint(): string {
+  const base =
+    'The visual critique loop needs LibreOffice + poppler. DeckPilot still works without it — just run with --critique-passes 0.';
+  switch (process.platform) {
+    case 'darwin':
+      return `${base} On macOS: brew install --cask libreoffice && brew install poppler.`;
+    case 'win32':
+      return `${base} On Windows: winget install TheDocumentFoundation.LibreOffice (and add C:\\Program Files\\LibreOffice\\program to PATH), then \`scoop install poppler\` or \`choco install poppler\`.`;
+    default:
+      return `${base} On Ubuntu/WSL: sudo apt install libreoffice poppler-utils. On Fedora: sudo dnf install libreoffice poppler-utils. On Arch: sudo pacman -S libreoffice-fresh poppler.`;
   }
 }
