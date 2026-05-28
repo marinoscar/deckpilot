@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { CopilotSession, ModelInfo } from '@github/copilot-sdk';
 import {
@@ -41,6 +42,8 @@ export type BusyListener = (busy: boolean) => void;
 export type BriefListener = (brief: DeckBrief | null) => void;
 export type TemplateListener = (template: TemplateProfile | null) => void;
 export type ProjectListener = (manifest: ProjectManifest | null) => void;
+export type SaveState = 'idle' | 'saving' | 'saved' | 'failed';
+export type SaveStateListener = (state: SaveState, lastError?: string) => void;
 
 export type ChatSessionOptions = {
   model?: string;
@@ -111,6 +114,9 @@ export class ChatSession {
   private dirtyManifest = false;
   private saveTimer: NodeJS.Timeout | null = null;
   private flushPromise: Promise<void> | null = null;
+  private saveState: SaveState = 'idle';
+  private saveStateListeners = new Set<SaveStateListener>();
+  private lastSaveError: string | undefined;
 
   constructor(
     private readonly dp: DeckPilotClient,
@@ -350,6 +356,59 @@ export class ChatSession {
     for (const fn of this.projectListeners) fn(this.project?.manifest ?? null);
   }
 
+  /**
+   * Copy a rendered preview PNG into the project's previews/ directory and
+   * push a `preview` transcript entry. Used by `write_slide_code` and
+   * `preview_slide` so the user sees a clickable file:// link for every
+   * slide the LLM critiques.
+   *
+   * Returns the absolute path of the saved PNG inside the project (or in
+   * a tmpdir when ephemeral) plus the per-slide pass number.
+   */
+  async recordPreview(
+    slideId: string,
+    sourcePngPath: string,
+  ): Promise<{ pngPath: string; pass: number }> {
+    // `consumeCritiquePass` already bumped the counter for this call, so the
+    // current value is this slide's nth visible pass.
+    const pass = this.critiqueUsage.get(slideId) ?? 0;
+    const baseDir = this.project
+      ? resolve(this.project.rootDir, 'previews')
+      : resolve(tmpdir(), 'deckpilot-preview-mirror');
+    const dest = resolve(baseDir, `${slideId}-${String(pass).padStart(2, '0')}.png`);
+    try {
+      await mkdir(baseDir, { recursive: true });
+      const data = await readFile(sourcePngPath);
+      await writeFile(dest, data);
+    } catch (e) {
+      log.warn('recordPreview copy failed:', (e as Error).message);
+      // Surface the source path so the file:// link still works even on
+      // copy failure (the cache PNG is still readable).
+      const entry: TranscriptEntry = {
+        kind: 'preview',
+        id: this.id(),
+        slideId,
+        pngPath: sourcePngPath,
+        pass,
+      };
+      this.transcript.push(entry);
+      void this.persistTranscriptEntry(entry);
+      this.emit();
+      return { pngPath: sourcePngPath, pass };
+    }
+    const entry: TranscriptEntry = {
+      kind: 'preview',
+      id: this.id(),
+      slideId,
+      pngPath: dest,
+      pass,
+    };
+    this.transcript.push(entry);
+    void this.persistTranscriptEntry(entry);
+    this.emit();
+    return { pngPath: dest, pass };
+  }
+
   /** Rename the current project on disk. Atomic dir rename + manifest rewrite. */
   async renameCurrentProject(newName: string): Promise<void> {
     if (!this.project) throw new Error('No active project to rename.');
@@ -426,6 +485,7 @@ export class ChatSession {
       getActiveTemplateName: () => this.getActiveTemplateName(),
       critiquePassesPerSlide: () => this.critiquePasses,
       consumeCritiquePass: (id) => this.consumeCritiquePass(id),
+      recordPreview: (slideId, sourcePath) => this.recordPreview(slideId, sourcePath),
     };
   }
 
@@ -655,11 +715,48 @@ export class ChatSession {
   private scheduleSave(): void {
     if (this.ephemeral || !this.project) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.setSaveState('saving');
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      // Fire-and-forget; errors get logged but don't crash the chat.
-      this.doFlush().catch((e) => log.warn('autosave failed:', (e as Error).message));
+      this.doFlush()
+        .then(() => this.setSaveState('saved'))
+        .catch((e) => {
+          const msg = (e as Error).message ?? String(e);
+          log.warn('autosave failed:', msg);
+          this.setSaveState('failed', msg);
+        });
     }, SAVE_DEBOUNCE_MS);
+  }
+
+  getSaveState(): SaveState {
+    return this.saveState;
+  }
+
+  getLastSaveError(): string | undefined {
+    return this.lastSaveError;
+  }
+
+  onSaveStateChange(fn: SaveStateListener): () => void {
+    this.saveStateListeners.add(fn);
+    fn(this.saveState, this.lastSaveError);
+    return () => {
+      this.saveStateListeners.delete(fn);
+    };
+  }
+
+  private setSaveState(next: SaveState, error?: string): void {
+    if (this.saveState === next && this.lastSaveError === error) return;
+    const wasFailed = this.saveState === 'failed';
+    this.saveState = next;
+    this.lastSaveError = next === 'failed' ? error : undefined;
+    // Surface a single system message on the transition into failed (only).
+    // Repeated failures don't spam the transcript.
+    if (next === 'failed' && !wasFailed) {
+      this.addSystemMessage(
+        `Autosave failed: ${error ?? 'unknown error'}. Your in-memory state is intact; the next change will retry.`,
+      );
+    }
+    for (const fn of this.saveStateListeners) fn(this.saveState, this.lastSaveError);
   }
 
   private async doFlush(): Promise<void> {
@@ -709,12 +806,30 @@ export class ChatSession {
       });
     });
     session.on('tool.execution_complete', (event) => {
-      const data = event.data as { toolName?: string; resultType?: string };
+      const data = event.data as {
+        success?: boolean;
+        toolDescription?: { name?: string };
+        error?: { message?: string; code?: string };
+        result?: { content?: string };
+      };
+      const name = data.toolDescription?.name ?? 'unknown';
+      const success = data.success !== false;
+      // Surface the failure message so the user sees WHY a tool failed,
+      // not just THAT it failed. Falls back to the LLM-facing content on
+      // success-but-with-detail, then to a generic placeholder.
+      let detail: string | undefined;
+      if (!success) {
+        detail = data.error?.message ?? data.result?.content;
+        if (detail && detail.length > 400) {
+          detail = `${detail.slice(0, 400)}…`;
+        }
+      }
       this.push({
         kind: 'tool',
         id: this.id(),
-        tool: data.toolName ?? 'unknown',
-        status: data.resultType === 'failure' ? 'error' : 'done',
+        tool: name,
+        status: success ? 'done' : 'error',
+        detail,
       });
     });
     session.on('session.idle', () => {

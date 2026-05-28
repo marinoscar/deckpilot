@@ -49,7 +49,7 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
     if (mode.kind !== 'browse') return;
     if (!entries) return;
 
-    if (key.escape || input === 'b' || input === 'q') {
+    if (key.escape || input === 'b') {
       onBack();
       return;
     }

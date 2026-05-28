@@ -1,15 +1,24 @@
 import { Box, Text } from 'ink';
 import type React from 'react';
+import type { SaveState } from '../chat/session.js';
 
 type Props = {
   status: 'idle' | 'streaming' | 'cancelled' | 'error';
   model: string;
   project?: string | null;
   template?: string | null;
+  saveState?: SaveState | null;
   hint?: string;
 };
 
-export const StatusBar: React.FC<Props> = ({ status, model, project, template, hint }) => {
+export const StatusBar: React.FC<Props> = ({
+  status,
+  model,
+  project,
+  template,
+  saveState,
+  hint,
+}) => {
   const color =
     status === 'streaming'
       ? 'cyan'
@@ -18,6 +27,25 @@ export const StatusBar: React.FC<Props> = ({ status, model, project, template, h
         : status === 'cancelled'
           ? 'yellow'
           : 'gray';
+
+  const saveDotColor =
+    saveState === 'saving'
+      ? 'yellow'
+      : saveState === 'failed'
+        ? 'red'
+        : saveState === 'saved'
+          ? 'green'
+          : 'gray';
+
+  const saveLabel =
+    saveState === 'saving'
+      ? 'saving'
+      : saveState === 'failed'
+        ? 'save failed'
+        : saveState === 'saved'
+          ? 'saved'
+          : 'idle';
+
   return (
     <Box flexDirection="column">
       <Box>
@@ -36,6 +64,13 @@ export const StatusBar: React.FC<Props> = ({ status, model, project, template, h
           <>
             <Text dimColor>{'  ·  '}</Text>
             <Text color="magenta">template: {template}</Text>
+          </>
+        ) : null}
+        {project && saveState ? (
+          <>
+            <Text dimColor>{'  ·  '}</Text>
+            <Text color={saveDotColor}>●</Text>
+            <Text dimColor> {saveLabel}</Text>
           </>
         ) : null}
       </Box>

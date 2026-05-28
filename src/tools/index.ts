@@ -51,6 +51,15 @@ export type DeckToolContext = {
   /** Hard cap on critique/preview calls per slide. 0 disables visual critique. */
   critiquePassesPerSlide: () => number;
   consumeCritiquePass: (slideId: string) => { remaining: number; allowed: boolean };
+  /**
+   * Copy a rendered preview PNG into the project (or tmpdir in ephemeral
+   * mode) and push a `preview` transcript entry so the user sees a
+   * clickable file:// link. Returns the saved absolute path.
+   */
+  recordPreview: (
+    slideId: string,
+    sourcePath: string,
+  ) => Promise<{ pngPath: string; pass: number }>;
 };
 
 type ToolResult<T = unknown> =
@@ -210,8 +219,10 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           const base64 = bytes.toString('base64');
           const slideIdx = brief.slides.findIndex((s) => s.id === args.slideId);
           const remaining = allow.remaining;
+          // Persist the PNG into the project + surface a clickable link to the user.
+          const recorded = await ctx.recordPreview(args.slideId, pngPath);
           return {
-            textResultForLlm: `Slide ${slideIdx + 1} ("${args.slideId}") code stored and rendered to PNG (attached). ${remaining} critique pass${remaining === 1 ? '' : 'es'} remaining. Look at the image; on the FIRST pass for any slide, find at least one specific improvement and call write_slide_code again with revised code. Stop when the slide is genuinely great, not just acceptable.`,
+            textResultForLlm: `Slide ${slideIdx + 1} ("${args.slideId}") code stored and rendered to PNG (attached). User-visible copy at ${recorded.pngPath}. ${remaining} critique pass${remaining === 1 ? '' : 'es'} remaining. Look at the image; on the FIRST pass for any slide, find at least one specific improvement and call write_slide_code again with revised code. Stop when the slide is genuinely great, not just acceptable.`,
             binaryResultsForLlm: [
               {
                 type: 'image' as const,
@@ -315,8 +326,9 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           const base64 = bytes.toString('base64');
           const slideIdx = brief.slides.findIndex((s) => s.id === args.slideId);
           const remaining = allow.remaining;
+          const recorded = await ctx.recordPreview(args.slideId, pngPath);
           return {
-            textResultForLlm: `Slide ${slideIdx + 1} ("${args.slideId}") re-previewed. ${remaining} pass${remaining === 1 ? '' : 'es'} remaining. Compare against sibling slides for cross-slide consistency.`,
+            textResultForLlm: `Slide ${slideIdx + 1} ("${args.slideId}") re-previewed. User-visible copy at ${recorded.pngPath}. ${remaining} pass${remaining === 1 ? '' : 'es'} remaining. Compare against sibling slides for cross-slide consistency.`,
             binaryResultsForLlm: [
               {
                 type: 'image' as const,

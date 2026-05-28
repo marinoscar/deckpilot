@@ -39,10 +39,6 @@ export const ProjectsBrowser: React.FC<Props> = ({ onOpen, onBack }) => {
       onBack();
       return;
     }
-    if (input === 'q') {
-      onBack();
-      return;
-    }
     if (entries.length === 0) return;
 
     if (key.upArrow) setIndex((i) => Math.max(0, i - 1));
@@ -108,7 +104,7 @@ export const ProjectsBrowser: React.FC<Props> = ({ onOpen, onBack }) => {
 
   if (entries.length === 0) {
     return (
-      <Panel title="Projects" subtitle="nothing saved yet" footer="b/Esc back · q quit">
+      <Panel title="Projects" subtitle="nothing saved yet" footer="b/Esc back">
         <Text dimColor>
           No projects saved yet under ~/.deckpilot/projects/.{'\n'}
           From the main menu, pick "Start a new deck" to begin one.

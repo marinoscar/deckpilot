@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { Box, Text, useApp, useInput } from 'ink';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
-import type { ChatSession, TranscriptEntry } from '../chat/session.js';
+import type { ChatSession, SaveState, TranscriptEntry } from '../chat/session.js';
 import { HELP_TEXT, parseSlash } from '../chat/slash.js';
 import { summarizeBrief } from '../deck/brief.js';
 import { renderDeck } from '../render/renderer.js';
@@ -32,6 +32,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
   const [templateName, setTemplateName] = useState<string | null>(
     session.getActiveTemplateName() ?? null,
   );
+  const [saveState, setSaveState] = useState<SaveState | null>(session.getSaveState());
   const lastCtrlC = useRef<number>(0);
 
   useEffect(() => session.subscribe(setEntries), [session]);
@@ -55,6 +56,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
       }),
     [session],
   );
+  useEffect(() => session.onSaveStateChange((s) => setSaveState(s)), [session]);
 
   useInput(async (input, key) => {
     if (key.ctrl && (input === 'c' || input === '\x03')) {
@@ -350,7 +352,13 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
         ) : (
           <Prompt disabled={false} onSubmit={handleSubmit} />
         )}
-        <StatusBar status={status} model={model} project={projectName} template={templateName} />
+        <StatusBar
+          status={status}
+          model={model}
+          project={projectName}
+          template={templateName}
+          saveState={saveState}
+        />
       </Box>
     </Box>
   );

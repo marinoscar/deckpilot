@@ -8,7 +8,7 @@ type Props = {
 
 export const Help: React.FC<Props> = ({ onBack }) => {
   useInput((input, key) => {
-    if (key.escape || input === 'b' || input === 'q') onBack();
+    if (key.escape || input === 'b') onBack();
   });
 
   return (

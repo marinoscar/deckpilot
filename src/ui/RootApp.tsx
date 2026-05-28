@@ -6,12 +6,15 @@ import { createClient } from '../copilot/client.js';
 import type { ProjectListEntry } from '../store/projects.js';
 import type { TemplateListEntry } from '../store/templates.js';
 import { App as ChatApp } from './App.js';
+import { AuthErrorBanner } from './screens/AuthErrorBanner.js';
 import { Help } from './screens/Help.js';
 import { MainMenu } from './screens/MainMenu.js';
 import { NewDeck } from './screens/NewDeck.js';
 import { ProjectsBrowser } from './screens/ProjectsBrowser.js';
 import { Settings } from './screens/Settings.js';
 import { TemplatesBrowser } from './screens/TemplatesBrowser.js';
+
+type StartOpts = { projectName?: string; templateName?: string };
 
 type View =
   | { kind: 'main' }
@@ -20,16 +23,13 @@ type View =
   | { kind: 'new-deck' }
   | { kind: 'settings' }
   | { kind: 'help' }
-  | { kind: 'chat'; session: ChatSession };
+  | { kind: 'chat'; session: ChatSession }
+  | { kind: 'auth-error'; message: string; retry: () => Promise<void> };
 
 type Props = {
-  /** Optional GitHub token override (forwarded to the Copilot SDK client when chat starts). */
   token?: string;
-  /** Optional model override applied to every chat session. */
   model?: string;
-  /** Default critique-passes budget. */
   critiquePassesPerSlide?: number;
-  /** Pre-launch directly into one screen — used by `start <name>` and friends so the CLI shortcut still works. */
   initialView?: View;
 };
 
@@ -46,11 +46,8 @@ export const RootApp: React.FC<Props> = ({
 }) => {
   const { exit } = useApp();
   const [view, setView] = useState<View>(initialView);
-  // Track session state so the StatusBar in chat can reflect changes
   const [busy, setBusy] = useState(false);
 
-  // When `view` becomes a chat, surface a top-level cleanup hook in case
-  // the React tree unmounts (Ctrl+C from inside ink).
   useEffect(() => {
     if (view.kind !== 'chat') return;
     return () => {
@@ -58,10 +55,7 @@ export const RootApp: React.FC<Props> = ({
     };
   }, [view]);
 
-  async function startChat(opts: {
-    projectName?: string;
-    templateName?: string;
-  }): Promise<void> {
+  async function startChat(opts: StartOpts): Promise<void> {
     setBusy(true);
     const dp = createClient({ gitHubToken: token });
     const session = new ChatSession(dp, {
@@ -73,7 +67,24 @@ export const RootApp: React.FC<Props> = ({
     try {
       await session.start();
     } catch (e) {
-      session.addSystemMessage(`Failed to start session: ${(e as Error).message}`);
+      const err = e as Error;
+      setBusy(false);
+      if (isAuthError(err)) {
+        // Tear down the half-started client before showing the banner.
+        try {
+          await session.stop();
+        } catch {
+          /* ignore */
+        }
+        setView({
+          kind: 'auth-error',
+          message: err.message,
+          retry: () => startChat(opts),
+        });
+        return;
+      }
+      // Non-auth failures still mount the chat so the user can see context.
+      session.addSystemMessage(`Failed to start session: ${err.message}`);
     }
     setBusy(false);
     setView({ kind: 'chat', session });
@@ -98,17 +109,26 @@ export const RootApp: React.FC<Props> = ({
     return <ChatApp session={view.session} onExit={() => void endChat()} />;
   }
 
+  if (view.kind === 'auth-error') {
+    const retry = view.retry;
+    return <AuthErrorBanner message={view.message} onRetry={() => void retry()} onBack={back} />;
+  }
+
   if (view.kind === 'main') {
     return (
       <MainMenu
         busy={busy}
-        onPick={(choice) => {
+        onPick={(choice, payload) => {
           switch (choice) {
             case 'start':
               setView({ kind: 'new-deck' });
               return;
             case 'resume':
-              setView({ kind: 'projects' });
+              if (payload?.projectName) {
+                void startChat({ projectName: payload.projectName });
+              } else {
+                setView({ kind: 'projects' });
+              }
               return;
             case 'projects':
               setView({ kind: 'projects' });
@@ -165,6 +185,25 @@ export const RootApp: React.FC<Props> = ({
 
   return null;
 };
+
+/**
+ * Recognise auth-shaped failures from the Copilot SDK / our auth resolver so
+ * the chat UI doesn't half-mount on a credential problem.
+ */
+function isAuthError(err: Error): boolean {
+  const name = (err.name ?? '').toLowerCase();
+  const msg = (err.message ?? '').toLowerCase();
+  if (name.includes('auth')) return true;
+  return (
+    msg.includes('unauthorized') ||
+    msg.includes('authentication') ||
+    msg.includes('not authenticated') ||
+    msg.includes('no github token') ||
+    msg.includes('invalid token') ||
+    msg.includes('device flow') ||
+    msg.includes('401')
+  );
+}
 
 /** Convenience entry point used by `bin/run` and the menu command. */
 export async function mountRootApp(opts: Props = {}): Promise<void> {

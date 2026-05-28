@@ -21,7 +21,7 @@ export const Settings: React.FC<Props> = ({ onBack }) => {
     if (key.escape) onBack();
   });
   useInput((input) => {
-    if (input === 'b' || input === 'q') onBack();
+    if (input === 'b') onBack();
   });
 
   const home = homeRoot();

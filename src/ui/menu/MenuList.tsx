@@ -60,9 +60,10 @@ export function MenuList<V>({
       if (item && !item.separator) onSelect(item.value);
     } else if (key.escape) {
       onBack?.();
-    } else if (input === 'q' && onBack) {
-      onBack();
     } else if (input === 'b' && onBack) {
+      // Standardised back binding. NOTE: `q` is intentionally NOT a back
+      // binding any more — screens that want `q` to do something specific
+      // (e.g. MainMenu's Quit row) wire it as a MenuItem.hotkey instead.
       onBack();
     } else if (input) {
       // Hotkey activation
