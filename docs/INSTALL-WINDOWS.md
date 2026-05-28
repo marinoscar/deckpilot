@@ -4,7 +4,19 @@ DeckPilot supports Windows natively as of v0.14 — no WSL required. This
 document covers the native Windows install path. (For WSL/Linux/macOS see
 [INSTALL.md](INSTALL.md).)
 
-## Two ways to install
+This guide uses **[scoop](https://scoop.sh)** as the package manager
+throughout. Scoop is the simplest option on Windows because:
+
+- **No admin / UAC prompts** — installs into your user folder (`~\scoop`).
+- **All-user-mode** — no `Program Files` clutter, no Defender headaches.
+- **One uninstall command** — `scoop uninstall foo`, no orphaned files.
+- **Has poppler** — winget doesn't, chocolatey needs admin.
+
+Where it makes sense the doc also shows the winget equivalents (Node + git
+in particular — Microsoft's own tools install cleanly via winget). For
+LibreOffice and poppler, **scoop is the recommended path**.
+
+## Two ways to install DeckPilot
 
 You can either:
 
@@ -35,23 +47,57 @@ If you'd rather do every step yourself, skip down to
 
 | | |
 |---|---|
-| **Windows 10 22H2+ or Windows 11** | Older Windows lacks `winget`. |
-| **PowerShell 5.1+** | Ships with Windows. PowerShell 7+ is recommended ([install via winget](#installing-powershell-7-optional)). |
-| **Node.js ≥ 20** | Required. Install via `winget install OpenJS.NodeJS.LTS` or [nodejs.org](https://nodejs.org). |
-| **git** | Required for the bootstrap clone. Install via `winget install Git.Git`. |
+| **Windows 10 22H2+ or Windows 11** | Older Windows is missing some package managers. |
+| **PowerShell 5.1+** | Ships with Windows. PowerShell 7+ is recommended ([install via scoop](#install-powershell-7-optional)). |
+| **scoop** | Recommended package manager. See [Step 0](#step-0--install-scoop-once-per-user). |
+| **Node.js ≥ 20** | Required. Via scoop: `scoop install nodejs-lts`. |
+| **git** | Required for the bootstrap clone. Via scoop: `scoop install git`. |
 | **GitHub Copilot subscription** | Required at *runtime* (not install). |
 | **LibreOffice + poppler** | Recommended. Powers vision-driven `template create --from <pptx>` and the visual critique loop. DeckPilot still installs without them — affected features fall back. |
 
 ## Recommended workflow (step-by-step)
 
-This is the **conservative path**: verify what's installed first, install any
-missing deps manually, then run the installer telling it not to touch the
-system.
+This is the **conservative path**: install scoop once, verify what's already
+there, install any missing deps via scoop, then run the DeckPilot installer
+telling it not to touch the system.
 
-### Step 1 — Verify your environment
+### Step 0 — Install scoop (once per user)
 
-Open PowerShell and run each of these. Anything that doesn't return what's
-expected goes into Step 2.
+#### Verify whether scoop is already installed
+
+```powershell
+scoop --version
+```
+
+If you see version info like `v0.5.x`, you're done — skip to
+[Step 1](#step-1--verify-the-rest-of-your-environment).
+
+If you see `The term 'scoop' is not recognized`, install it:
+
+#### Install scoop
+
+```powershell
+# Allow scripts to run for the current user (one-time)
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# Install scoop into ~\scoop (no admin needed)
+iwr -useb get.scoop.sh | iex
+```
+
+Then verify:
+
+```powershell
+scoop --version    # should print v0.5.x or similar
+scoop bucket list  # should show "main"
+```
+
+If you're behind a corporate proxy / TLS-inspecting firewall and `iwr` fails,
+see the [Troubleshooting](#troubleshooting) section.
+
+### Step 1 — Verify the rest of your environment
+
+Run each of these. Anything that doesn't return what's expected goes into
+Step 2.
 
 #### Node.js ≥ 20
 
@@ -79,9 +125,11 @@ $PSVersionTable.PSVersion    # 5.1 is fine; 7.x is better
 LibreOffice usually isn't on `PATH` by default, so check by binary path:
 
 ```powershell
+# Scoop install location (if you used scoop)
+Test-Path "$HOME\scoop\apps\libreoffice\current\program\soffice.exe"
+
+# Or the MSI install location (if you installed manually)
 Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
-# OR (32-bit install location):
-Test-Path 'C:\Program Files (x86)\LibreOffice\program\soffice.exe'
 ```
 
 If one returns `True`, you have it. To confirm it actually runs:
@@ -90,8 +138,8 @@ If one returns `True`, you have it. To confirm it actually runs:
 & 'C:\Program Files\LibreOffice\program\soffice.exe' --version
 ```
 
-DeckPilot probes both locations automatically — you do **not** need to add
-LibreOffice to `PATH`.
+DeckPilot probes both `Program Files` locations automatically — you do
+**not** need to add LibreOffice to `PATH`.
 
 #### poppler / pdftoppm
 
@@ -104,115 +152,88 @@ pdftoppm -v
 `pdftoppm` writes its version to stderr; if you see something like
 `pdftoppm version 23.x.x ...` you have it.
 
-#### Package managers (winget / scoop / choco)
-
-```powershell
-Get-Command winget, scoop, choco -ErrorAction SilentlyContinue
-```
-
-You need at least **one** for Step 2's automated install commands to work.
-`winget` ships with Windows 11 and recent Windows 10. `scoop` and `choco`
-are user-installed.
-
-### Step 2 — Install missing prerequisites
+### Step 2 — Install missing prerequisites (all via scoop)
 
 Only run the lines for things that came up missing in Step 1.
 
 #### Install Node 22 LTS
 
 ```powershell
-winget install OpenJS.NodeJS.LTS
+scoop install nodejs-lts
 ```
 
-After it finishes, **close your terminal and open a new one** so `PATH`
-picks up Node. Then re-verify:
+Re-verify:
 
 ```powershell
 node --version       # v22.x.x
 npm --version
 ```
 
+> Alternative (Microsoft tool, requires accepting the MSI installer's UAC
+> prompt): `winget install OpenJS.NodeJS.LTS`
+
 #### Install git
 
 ```powershell
-winget install Git.Git
+scoop install git
 ```
 
-Open a new terminal. Re-verify:
+Re-verify:
 
 ```powershell
 git --version
 ```
 
+> Alternative: `winget install Git.Git`
+
 #### Install LibreOffice (recommended)
 
 ```powershell
-winget install --id TheDocumentFoundation.LibreOffice --silent
+scoop bucket add extras
+scoop install libreoffice
 ```
 
-Re-verify (no need to open a new terminal — DeckPilot probes the install
-path directly):
+Re-verify:
 
 ```powershell
-Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
-& 'C:\Program Files\LibreOffice\program\soffice.exe' --version
+Test-Path "$HOME\scoop\apps\libreoffice\current\program\soffice.exe"
 ```
 
-> winget does not have poppler. Install it via scoop or chocolatey below.
+> Alternative: `winget install --id TheDocumentFoundation.LibreOffice --silent`
+> — installs to `C:\Program Files\LibreOffice\`. DeckPilot finds both paths
+> automatically.
 
 #### Install poppler (recommended)
 
-If you have **scoop**:
-
 ```powershell
 scoop install poppler
 ```
 
-If you have **chocolatey** (admin shell):
-
-```powershell
-choco install -y poppler
-```
-
-If you have **neither**, the lightest option is to install scoop first:
-
-```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-iwr -useb get.scoop.sh | iex
-scoop install poppler
-```
-
-Re-verify in a new terminal:
+Re-verify:
 
 ```powershell
 pdftoppm -v
 ```
 
-#### Installing PowerShell 7 (optional)
+> winget does not have poppler, and chocolatey requires admin. Scoop is
+> the easiest way here.
 
-PS 7+ has much better terminal handling than PS 5.1 — the ink TUI looks nicer:
+#### Install PowerShell 7 (optional)
+
+PS 7+ has much better terminal handling than PS 5.1 — the ink TUI renders
+nicer:
 
 ```powershell
-winget install Microsoft.PowerShell
+scoop install pwsh
 ```
 
 Then launch `pwsh` instead of `powershell` going forward.
 
-### Step 3 — Allow PowerShell scripts to run
+> Alternative: `winget install Microsoft.PowerShell`
 
-If you'll run `install.ps1` from disk (not via `iwr | iex`), enable script
-execution for your user once:
+### Step 3 — Run the installer
 
-```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-The `iwr | iex` one-liner doesn't trip the execution-policy guard because
-the script is piped, not loaded from disk.
-
-### Step 4 — Run the installer
-
-Now that all the system deps are in place, run the installer with
+Now that all the system deps are in place, run the DeckPilot installer with
 `-NoInstallDeps` so it skips the system-dep prompt and just installs
 DeckPilot itself:
 
@@ -265,7 +286,7 @@ DeckPilot installer v0.14.0
 ✓ GitHub token resolvable — source: env COPILOT_GITHUB_TOKEN
 ✓ cwd writable — C:\Users\you
 ✓ Copilot SDK reachable — ping ok at ...
-✓ Visual critique pipeline — C:\Program Files\LibreOffice\program\soffice.exe + C:\Users\you\scoop\apps\poppler\current\bin\pdftoppm.exe
+✓ Visual critique pipeline — C:\Users\you\scoop\apps\libreoffice\current\program\soffice.exe + C:\Users\you\scoop\apps\poppler\current\bin\pdftoppm.exe
 
 DeckPilot is ready.
 ```
@@ -299,14 +320,37 @@ Same as `install.sh`:
 
 ## Package manager reference
 
-| Dep | winget | scoop | choco |
-|---|---|---|---|
-| **LibreOffice** | `winget install --id TheDocumentFoundation.LibreOffice --silent` | `scoop bucket add extras; scoop install libreoffice` | `choco install -y libreoffice-fresh` |
-| **poppler** | not available | `scoop install poppler` | `choco install -y poppler` |
-| **Node.js** | `winget install OpenJS.NodeJS.LTS` | `scoop install nodejs-lts` | `choco install -y nodejs-lts` |
-| **git** | `winget install Git.Git` | `scoop install git` | `choco install -y git` |
+scoop is the recommended path. The other columns are alternatives.
 
-## poppler manual install (if no package manager)
+| Dep | scoop (recommended) | winget | choco |
+|---|---|---|---|
+| **Node.js LTS** | `scoop install nodejs-lts` | `winget install OpenJS.NodeJS.LTS` | `choco install -y nodejs-lts` |
+| **git** | `scoop install git` | `winget install Git.Git` | `choco install -y git` |
+| **LibreOffice** | `scoop bucket add extras; scoop install libreoffice` | `winget install --id TheDocumentFoundation.LibreOffice --silent` | `choco install -y libreoffice-fresh` |
+| **poppler** | `scoop install poppler` | not available | `choco install -y poppler` |
+| **PowerShell 7** | `scoop install pwsh` | `winget install Microsoft.PowerShell` | `choco install -y powershell-core` |
+
+DeckPilot's installer auto-detects all three; it just prefers scoop for
+poppler since it's the only fully-userspace option.
+
+## Uninstalling via scoop
+
+If you used scoop for everything, you can unwind cleanly:
+
+```powershell
+scoop uninstall poppler
+scoop uninstall libreoffice
+# (only if you want to remove them — Node and git are useful for other things)
+```
+
+To remove scoop itself entirely:
+
+```powershell
+scoop uninstall scoop
+Remove-Item -Recurse -Force $HOME\scoop
+```
+
+## poppler manual install (if you really don't want scoop)
 
 1. Download the latest release zip from
    [oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases).
@@ -327,12 +371,12 @@ Same as `install.sh`:
    pdftoppm -v
    ```
 
-## LibreOffice manual install (if no winget)
+## LibreOffice manual install (if you really don't want scoop)
 
 1. Download the Windows installer from
    [libreoffice.org/download](https://www.libreoffice.org/download/download/).
 2. Run the MSI; accept the defaults.
-3. Verify the install location:
+3. Verify:
 
    ```powershell
    Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'
@@ -377,7 +421,7 @@ The installer auto-detects re-runs on an existing install:
 
 Force the full path with `-Reinstall`.
 
-## Uninstall
+## Uninstall DeckPilot
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 | iex -Args '-Uninstall'
@@ -406,8 +450,17 @@ Remove-Item -Recurse -Force $HOME\.deckpilot
 ## Troubleshooting
 
 **"running scripts is disabled on this system"**
-Run the one-time `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
-above, or pipe the script (`iwr | iex`) instead of executing from disk.
+Run the one-time `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`.
+
+**`scoop` install fails with TLS / certificate errors**
+You're likely on a corporate network with TLS inspection. Either ask IT
+for the root CA certificate and add it to the Windows Trusted Root
+Certification Authorities store (`certmgr.msc`), or use winget for
+LibreOffice and the [manual poppler install](#poppler-manual-install-if-you-really-dont-want-scoop)
+above.
+
+**`scoop` install fails with execution-policy error**
+Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` first.
 
 **`deckpilot` not on PATH after install**
 Open a new terminal — npm's global bin (`%APPDATA%\npm`) is added to PATH
@@ -423,13 +476,12 @@ there after restart, add it manually:
 ```
 
 **`deckpilot doctor` says "libreoffice not found"**
-Either install LibreOffice (`winget install TheDocumentFoundation.LibreOffice`)
-or run with `--critique-passes 0` to skip the visual loop entirely.
-DeckPilot still produces decks without it.
+Install LibreOffice (`scoop install libreoffice`) or run with
+`--critique-passes 0` to skip the visual loop entirely. DeckPilot still
+produces decks without it.
 
 **`deckpilot doctor` says "pdftoppm missing"**
-Install poppler via `scoop install poppler` or `choco install -y poppler`,
-or grab the binary release linked above and add its `bin\` to PATH.
+Install poppler (`scoop install poppler`).
 
 **TLS errors during `git clone`**
 You're likely on a corporate network with TLS inspection. Ask IT for the
@@ -458,8 +510,10 @@ $env:DECKPILOT_REF = 'feature/foo'     # branch
 ## What's different from Linux / macOS
 
 - The installer is `install.ps1`, not `install.sh`.
-- LibreOffice and poppler aren't on PATH by default after install.
-  DeckPilot probes their standard install locations as a fallback.
+- LibreOffice and poppler aren't on PATH by default after install
+  (especially when installed via scoop). DeckPilot probes their standard
+  install locations as a fallback.
 - The default terminal on older Windows boxes (`cmd.exe`) has limited
   ANSI support. Use **Windows Terminal** + PowerShell 7+ for the best
-  TUI experience. Both are available via winget.
+  TUI experience. Both are installable via `scoop install windows-terminal`
+  + `scoop install pwsh`.
