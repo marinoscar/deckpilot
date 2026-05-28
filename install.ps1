@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.14.4'
+$INSTALL_SCRIPT_VERSION = '0.14.5'
 
 # ---------- globals ----------
 
@@ -134,19 +134,29 @@ function Add-LogLine($msg) {
 # Run a script-block. Captures stdout, stderr, AND ErrorRecord objects
 # (which is how PowerShell wraps native-command stderr in PS 5.1). Writes
 # the full output to the install log. Throws on non-zero $LASTEXITCODE.
+#
+# CRITICAL: temporarily relaxes $ErrorActionPreference to 'Continue' so a
+# native command's harmless stderr (e.g. `npm warn allow-scripts ...`)
+# doesn't tear down the whole script. We rely solely on $LASTEXITCODE to
+# tell us whether the command actually failed. With the default 'Stop',
+# PowerShell 5.1 treats ANY native stderr as a terminating
+# NativeCommandError, even for successful runs with exit code 0.
 function Invoke-Logged($label, [scriptblock] $block) {
     Add-LogLine "--- $label ---"
-    $captured = & $block 2>&1
-    foreach ($item in $captured) {
-        # PS 5.1 wraps native stderr as System.Management.Automation.ErrorRecord
-        # whose .ToString() returns the FullyQualifiedErrorId, not the message.
-        # We have to dig out Exception.Message explicitly or this is opaque.
-        $text = if ($item -is [System.Management.Automation.ErrorRecord]) {
-            $item.Exception.Message
-        } else {
-            "$item"
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $captured = & $block 2>&1
+        foreach ($item in $captured) {
+            $text = if ($item -is [System.Management.Automation.ErrorRecord]) {
+                $item.Exception.Message
+            } else {
+                "$item"
+            }
+            if ($text) { Add-Content -Path $InstallLog -Value $text -ErrorAction SilentlyContinue }
         }
-        if ($text) { Add-Content -Path $InstallLog -Value $text -ErrorAction SilentlyContinue }
+    } finally {
+        $ErrorActionPreference = $prevPref
     }
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         throw "$label failed with exit code $LASTEXITCODE"
