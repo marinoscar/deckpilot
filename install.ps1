@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.14.0'
+$INSTALL_SCRIPT_VERSION = '0.14.1'
 
 # ---------- globals ----------
 
@@ -531,7 +531,10 @@ function Test-PathContains($bin) {
     if ($found) { return }
     Write-Warn "$bin is not on your PATH in this session."
     Write-Note "Add it permanently via:"
-    Write-Note "  [Environment]::SetEnvironmentVariable('Path', \"\$([Environment]::GetEnvironmentVariable('Path','User'));$bin\", 'User')"
+    # NOTE: PowerShell quoting — backtick-quote (`") for literal double quotes,
+    # backtick-dollar (`$) to suppress subexpression evaluation. $bin IS
+    # interpolated so the user copy-pastes the actual path.
+    Write-Note "  [Environment]::SetEnvironmentVariable('Path', `"`$([Environment]::GetEnvironmentVariable('Path','User'));$bin`", 'User')"
     Write-Note "Or open a new shell — npm's install of Node typically adds it on first run."
 }
 
