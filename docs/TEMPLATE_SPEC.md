@@ -15,24 +15,33 @@ the LLM honours when generating decks. Templates live under
 The `<name>` is the directory name. It must match `template.json`'s `name`
 field and follow lower-case kebab rules (`[a-z0-9-]+`).
 
-## Three ways to create a template
+## Four ways to create a template
 
 ```bash
-# 1. From an existing .pptx — extracts palette / fonts / aspect; logos and
-#    voice/copy fields are left blank for you to fill in.
+# 1. Vision-driven from an existing .pptx (recommended; default for --from)
+#    The LLM renders every slide of the source deck, looks at them via
+#    vision, and authors a rich TemplateSpec — palette, fonts, tone, voice,
+#    copyRules, plus a dense `guidance` field with quoted observations
+#    ("covers are full-bleed photography with a single-line title
+#    bottom-left in 56pt geometric sans"). Needs LibreOffice + Copilot auth.
 deckpilot template create acme-corp --from ./brand.pptx
 
-# 2. From scratch — drops a blank scaffold with safe defaults; edit by hand.
+# 2. Shallow OOXML-only extraction from a .pptx
+#    Reads theme1.xml only — palette + fonts. Faster, no LLM call, but
+#    voiceHints / copyRules / guidance are left empty for you to fill in.
+deckpilot template create acme-corp --from ./brand.pptx --shallow
+
+# 3. Blank scaffold from scratch — drops safe defaults; edit by hand.
 deckpilot template create personal
 
-# 3. In chat — ask the LLM to author one, e.g. "create a luxe black-and-gold
-#    template for jewellery brands and save it as `luxe-jewellery`". It
-#    calls the `save_template` tool internally.
+# 4. LLM-authored inside chat
+#    Ask the agent: "create a luxe black-and-gold template for jewellery
+#    brands and save it as `luxe-jewellery`". It calls `save_template`
+#    internally with a full spec.
 ```
 
-To use a template in a chat: `deckpilot chat my-deck --template acme-corp`
-(or pick it from the startup TUI list, or run `/template acme-corp`
-mid-session).
+To use a template: `deckpilot start my-deck --template acme-corp` (or pick
+it from the startup TUI list, or run `/template acme-corp` mid-session).
 
 To share a template: zip the directory, send it, recipient unzips into their
 `~/.deckpilot/templates/`. No registry, no server, no internet required.
@@ -100,9 +109,13 @@ KB so they don't crowd out the deck content from the model's context window.
   Short sentences. No marketing puffery."
 - `copyRules` — bullets of dos/don'ts: "Always capitalise `Cloud`. Never use
   `utilize`. Section titles take a trailing period."
-- `guidance` — longer style notes: composition habits ("favour asymmetric
-  two-column layouts"), taboos ("no drop shadows, no gradients"), references
-  ("see Pentagram's 2024 annual report for the visual vocabulary").
+- `guidance` — longer style notes. **This is where the brand actually lives.**
+  When the vision extractor authors a template, it fills this field with
+  quoted, specific observations: composition habits ("favour asymmetric
+  two-column layouts", "1.2\" reserved above an all-caps eyebrow on body
+  slides"), taboos ("no drop shadows, no gradients"), spatial conventions
+  ("titles always at y≈0.6"), brand idiosyncrasies ("photography is
+  monochrome except for spot-colour fruit imagery").
 
 ## Example 1 — hand-written "personal pitch" template
 
@@ -129,7 +142,7 @@ KB so they don't crowd out the deck content from the model's context window.
 }
 ```
 
-## Example 2 — `.pptx`-extracted "acme-corp" with a logo
+## Example 2 — vision-extracted "acme-corp" with a logo
 
 Run:
 
@@ -137,15 +150,16 @@ Run:
 deckpilot template create acme-corp --from ~/Downloads/AcmeBrand.pptx --brand "Acme Corp"
 ```
 
-Then drop `logo.png` into `~/.deckpilot/templates/acme-corp/assets/` and
-hand-edit `template.json` to add the asset reference + voice:
+The vision pass renders every slide of `AcmeBrand.pptx`, the LLM examines
+them, and the resulting `template.json` looks something like this — palette,
+fonts, voice, and a dense `guidance` field are all auto-populated:
 
 ```json
 {
   "schemaVersion": "1.0",
   "name": "acme-corp",
   "brand": "Acme Corp",
-  "description": "Imported from AcmeBrand.pptx.",
+  "description": "Imported from AcmeBrand.pptx — corporate, plainspoken.",
   "theme": {
     "accent": "0F62FE",
     "accentAlt": "002D9C",
@@ -157,15 +171,35 @@ hand-edit `template.json` to add the asset reference + voice:
     "tone": "corporate",
     "aspect": "16:9"
   },
-  "assets": {
-    "logo": "assets/logo.png"
-  },
-  "voiceHints": "Plainspoken, no jargon, no exclamation marks. Numbers over adjectives."
+  "voiceHints": "Plainspoken, no jargon, no exclamation marks. Numbers over adjectives.",
+  "copyRules": "- Always capitalise 'Cloud'.\n- Never use 'utilize'.\n- Headlines are sentence case with terminal periods.",
+  "guidance": "Covers use a full-bleed accent-coloured panel with a single-line title bottom-left in 64pt IBM Plex Sans Bold (white). Body slides reserve the top 1.2\" empty above an 11pt tracked-out kicker in muted grey, followed by a 44pt heading. Numbers are oversized (96pt) in the accent colour with subscript units. Section dividers use a thin 2px accent-coloured rule at y=6.0. Never mix accent and accentAlt on the same element; accentAlt is reserved for one deliberate pop per slide."
 }
 ```
 
-The LLM, with `theme.assets.logo` resolved to an absolute path, will place
-the logo on covers and section dividers automatically.
+To attach a logo, drop `logo.png` into `~/.deckpilot/templates/acme-corp/assets/`
+and add it to `template.json` under the `assets` block (the vision pass
+deliberately leaves `assets` blank — logos vary too much for the model to
+infer reliably):
+
+```json
+"assets": {
+  "logo": "assets/logo.png"
+}
+```
+
+With `theme.assets.logo` then resolved to an absolute path, the LLM will
+place the logo on covers and section dividers when authoring decks.
+
+### Want the old behaviour?
+
+If you'd rather skip the LLM and just extract palette + fonts from the
+OOXML theme (faster, no auth needed, but voiceHints / copyRules / guidance
+are left empty for you to fill in by hand):
+
+```bash
+deckpilot template create acme-corp --from ./brand.pptx --shallow
+```
 
 ## Validation
 
