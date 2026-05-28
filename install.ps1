@@ -1,20 +1,20 @@
 ﻿# DeckPilot installer for Windows (PowerShell 5.1+ / PowerShell 7+).
 #
-# Mirrors install.sh: clones the repo (or uses your local checkout), builds,
-# links the `deckpilot` command, offers to install LibreOffice + poppler
-# (the visual-pipeline deps), then runs `deckpilot doctor` to verify the
-# install end-to-end. Re-running it auto-detects existing installs and
-# switches into a fast update path.
+# Mirrors install.sh: downloads the repo (zip tarball, no git required),
+# builds, links the `deckpilot` command, offers to install LibreOffice +
+# poppler (the visual-pipeline deps), then runs `deckpilot doctor` to
+# verify the install end-to-end. Re-running it auto-detects existing
+# installs and switches into a fast update path.
 #
 # Usage:
 #   .\install.ps1                       install for the current user via `npm link`
 #   .\install.ps1 -System               install system-wide (requires admin)
-#   .\install.ps1 -Update               fast-path: fetch + build only
+#   .\install.ps1 -Update               fast-path: refresh + build only
 #   .\install.ps1 -Reinstall            force full install path even on an existing install
 #   .\install.ps1 -InstallDeps          install missing system deps without prompt
 #   .\install.ps1 -NoInstallDeps        never auto-install system deps; just print the command
 #   .\install.ps1 -SkipDoctor           skip the final `deckpilot doctor` verification
-#   .\install.ps1 -Uninstall            remove the symlink + (if bootstrapped) the clone
+#   .\install.ps1 -Uninstall            remove the symlink + (if bootstrapped) the install dir
 #   .\install.ps1 -NoBuild              skip the TypeScript build
 #   .\install.ps1 -Quiet                less chatty
 #   .\install.ps1 -Log <path>           override the install log location
@@ -23,10 +23,10 @@
 #   iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 | iex
 #
 # Environment variables:
-#   DECKPILOT_INSTALL_DIR     where to clone when bootstrapping (default $HOME\.deckpilot\repo)
-#   DECKPILOT_REPO_URL        primary git URL to clone
-#   DECKPILOT_REPO_MIRRORS    comma-separated fallback mirrors
-#   DECKPILOT_REF             git ref to check out (default main)
+#   DECKPILOT_INSTALL_DIR     where to extract when bootstrapping (default $HOME\.deckpilot\repo)
+#   DECKPILOT_REPO_URL        primary GitHub https URL (used to derive the zip URL)
+#   DECKPILOT_REPO_MIRRORS    comma-separated fallback https URLs
+#   DECKPILOT_REF             git ref to fetch (branch, tag, or SHA; default main)
 #   DECKPILOT_INSTALL_LOG     override the install log path
 
 [CmdletBinding()]
@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.14.3'
+$INSTALL_SCRIPT_VERSION = '0.14.4'
 
 # ---------- globals ----------
 
@@ -80,18 +80,23 @@ if ($IsLocalCheckout) {
 }
 
 $IsUpdate = $false
-$RollbackKind = ''     # 'fresh' | 'update' | ''
-$RollbackSha = ''      # previous HEAD SHA when RollbackKind='update'
+$RollbackKind = ''       # 'fresh' | 'update' | ''
+$RollbackBackupDir = ''  # for update mode: full path to the .backup dir to restore on failure
+$OldLockHash = ''        # SHA1 of the previous package-lock.json; used to skip npm ci on no-op updates
 $MissingDeps = @()
 
 # ---------- output helpers ----------
+#
+# NOTE: this file is saved as UTF-8 *with BOM* so PowerShell 5.1 reads
+# Unicode characters in the strings (·, ✓, ✗) correctly. Without the BOM,
+# PS 5.1 falls back to Windows-1252 and renders them as garbage.
 
 function Write-Step($msg) {
-    if (-not $Quiet) { Write-Host "`u{00B7} $msg" -ForegroundColor White }
+    if (-not $Quiet) { Write-Host "· $msg" -ForegroundColor White }
     Add-LogLine "STEP: $msg"
 }
 function Write-Ok($msg) {
-    if (-not $Quiet) { Write-Host "`u{2713} $msg" -ForegroundColor Green }
+    if (-not $Quiet) { Write-Host "✓ $msg" -ForegroundColor Green }
     Add-LogLine "OK: $msg"
 }
 function Write-Warn($msg) {
@@ -99,7 +104,7 @@ function Write-Warn($msg) {
     Add-LogLine "WARN: $msg"
 }
 function Write-Die($msg) {
-    Write-Host "`u{2717} $msg" -ForegroundColor Red
+    Write-Host "✗ $msg" -ForegroundColor Red
     Add-LogLine "DIE: $msg"
     throw $msg
 }
@@ -114,7 +119,6 @@ function Initialize-Log {
     if ($logDir -and -not (Test-Path $logDir)) {
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     }
-    # Truncate per-run.
     Set-Content -Path $InstallLog -Value '' -Force
 }
 
@@ -127,11 +131,22 @@ function Add-LogLine($msg) {
     }
 }
 
-# Run a script-block, redirecting all output to the log. Throws on failure.
+# Run a script-block. Captures stdout, stderr, AND ErrorRecord objects
+# (which is how PowerShell wraps native-command stderr in PS 5.1). Writes
+# the full output to the install log. Throws on non-zero $LASTEXITCODE.
 function Invoke-Logged($label, [scriptblock] $block) {
     Add-LogLine "--- $label ---"
-    & $block 2>&1 | ForEach-Object {
-        Add-Content -Path $InstallLog -Value $_.ToString() -ErrorAction SilentlyContinue
+    $captured = & $block 2>&1
+    foreach ($item in $captured) {
+        # PS 5.1 wraps native stderr as System.Management.Automation.ErrorRecord
+        # whose .ToString() returns the FullyQualifiedErrorId, not the message.
+        # We have to dig out Exception.Message explicitly or this is opaque.
+        $text = if ($item -is [System.Management.Automation.ErrorRecord]) {
+            $item.Exception.Message
+        } else {
+            "$item"
+        }
+        if ($text) { Add-Content -Path $InstallLog -Value $text -ErrorAction SilentlyContinue }
     }
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         throw "$label failed with exit code $LASTEXITCODE"
@@ -155,7 +170,6 @@ function Invoke-Retry([int] $Attempts, [scriptblock] $Block) {
 # ---------- package manager detection ----------
 
 function Get-PackageManager {
-    # Prefer winget for LibreOffice (built into Windows 11), scoop/choco for poppler.
     $pms = @()
     if (Get-Command winget -ErrorAction SilentlyContinue) { $pms += 'winget' }
     if (Get-Command scoop  -ErrorAction SilentlyContinue) { $pms += 'scoop' }
@@ -163,14 +177,12 @@ function Get-PackageManager {
     return $pms
 }
 
-# Map (pm, logical-dep) -> the exact command to install it.
-# Logical deps: libreoffice, poppler.
 function Get-InstallCommand($pm, $dep) {
     switch ("${pm}:$dep") {
         'winget:libreoffice' { return 'winget install --id TheDocumentFoundation.LibreOffice --silent' }
         'scoop:libreoffice'  { return 'scoop bucket add extras; scoop install libreoffice' }
         'choco:libreoffice'  { return 'choco install -y libreoffice-fresh' }
-        'winget:poppler'     { return $null }     # winget does not ship poppler
+        'winget:poppler'     { return $null }
         'scoop:poppler'      { return 'scoop install poppler' }
         'choco:poppler'      { return 'choco install -y poppler' }
         default              { return $null }
@@ -178,7 +190,6 @@ function Get-InstallCommand($pm, $dep) {
 }
 
 function Get-DepsInstallPlan($pms, $deps) {
-    # Returns @{ commands = @(...); usedPms = @(...); skipped = @() }
     $commands = @()
     $usedPms = @()
     $skipped = @()
@@ -204,21 +215,15 @@ function Invoke-Rollback {
     switch ($RollbackKind) {
         'fresh' {
             if ($RepoDir -and (Test-Path $RepoDir)) {
-                Write-Warn "Install failed — removing partial clone at $RepoDir"
+                Write-Warn "Install failed - removing partial install at $RepoDir"
                 Remove-Item -Recurse -Force $RepoDir -ErrorAction SilentlyContinue
             }
         }
         'update' {
-            if ($RollbackSha -and (Test-Path (Join-Path $RepoDir '.git'))) {
-                Write-Warn "Update failed — rolling back $RepoDir to $RollbackSha"
-                try {
-                    Push-Location $RepoDir
-                    Invoke-Logged 'rollback git reset' { git reset --hard $RollbackSha }
-                } catch {
-                    # nothing else we can do
-                } finally {
-                    Pop-Location -ErrorAction SilentlyContinue
-                }
+            if ($script:RollbackBackupDir -and (Test-Path $script:RollbackBackupDir)) {
+                Write-Warn "Update failed - restoring previous install from $($script:RollbackBackupDir)"
+                if (Test-Path $RepoDir) { Remove-Item -Recurse -Force $RepoDir -ErrorAction SilentlyContinue }
+                Rename-Item -Path $script:RollbackBackupDir -NewName (Split-Path -Leaf $RepoDir) -ErrorAction SilentlyContinue
             }
         }
     }
@@ -230,7 +235,7 @@ function Invoke-Rollback {
 function Test-Preflight-Node {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) {
-        Write-Die "Node is not installed. On Windows, install with: winget install OpenJS.NodeJS.LTS"
+        Write-Die "Node is not installed. On Windows, install with: winget install OpenJS.NodeJS.LTS (or scoop install nodejs-lts)"
     }
     $npm = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $npm) {
@@ -242,12 +247,6 @@ function Test-Preflight-Node {
         Write-Die "Node $v is too old. DeckPilot needs Node >= 20. Install with: winget install OpenJS.NodeJS.LTS"
     }
     Write-Ok "Node $v"
-}
-
-function Test-Preflight-Git {
-    if ($Bootstrap -and -not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Die "git is not installed (needed for bootstrap clone). Install with: winget install Git.Git"
-    }
 }
 
 function Test-Preflight-Disk {
@@ -310,9 +309,6 @@ function Get-Consent {
     if ($InstallDeps)   { return $true }
     if ($NoInstallDeps) { return $false }
     if (-not [Environment]::UserInteractive) { return $false }
-    # Test whether we actually have a stdin to read from. In `iwr | iex` the
-    # script runs interactively but stdin may still be piped — Host.UI.RawUI is
-    # the safer probe.
     if (-not $Host.UI.RawUI) { return $false }
     $reply = Read-Host "Install $($script:MissingDeps -join ', ') now? [y/N]"
     return ($reply -match '^[yY]')
@@ -324,7 +320,7 @@ function Install-Or-Hint-Deps {
     $pms = Get-PackageManager
     if ($pms.Count -eq 0) {
         Write-Warn "No supported package manager found (winget / scoop / choco)."
-        Write-Note "Install winget (Windows 11 has it) or scoop (https://scoop.sh) and re-run with --install-deps."
+        Write-Note "Install winget (Windows 11 has it) or scoop (https://scoop.sh) and re-run with -InstallDeps."
         Write-Note "Manual installs:"
         Write-Note "  LibreOffice: https://www.libreoffice.org/download/download/"
         Write-Note "  poppler:     https://github.com/oschwartz10612/poppler-windows/releases (unzip + add bin to PATH)"
@@ -347,7 +343,7 @@ function Install-Or-Hint-Deps {
     Write-Note "Plan:"
     foreach ($c in $plan.commands) { Write-Note "  $c" }
     Write-Note "These deps power vision-driven template extraction and the visual critique loop."
-    Write-Note "DeckPilot still installs without them — affected features fall back."
+    Write-Note "DeckPilot still installs without them - affected features fall back."
 
     if (Get-Consent) {
         foreach ($c in $plan.commands) {
@@ -366,67 +362,157 @@ function Install-Or-Hint-Deps {
     }
 }
 
-# ---------- bootstrap ----------
+# ---------- bootstrap (zip download path; no git required) ----------
 
-function Get-Mirrors {
-    $mirrors = @($RepoUrl)
+# Derive the owner/repo from the repo URL (handles both git+https and plain
+# https forms). Returns "owner/repo".
+function Get-RepoSlug([string]$Url) {
+    # Strip .git suffix and protocol noise.
+    $u = $Url.TrimEnd('/')
+    if ($u.EndsWith('.git')) { $u = $u.Substring(0, $u.Length - 4) }
+    # Match the trailing /<owner>/<repo>.
+    if ($u -match 'github\.com[/:]([^/]+/[^/]+)$') {
+        return $Matches[1]
+    }
+    return $null
+}
+
+# Build the GitHub archive URL for the given ref. Handles branches, tags
+# (refs/tags/<tag>), and SHAs (7-40 hex chars). GitHub also accepts plain
+# branch / tag names under /archive/<name>.zip but the explicit refs paths
+# are unambiguous.
+function Get-ArchiveUrl([string]$Slug, [string]$Ref) {
+    if ($Ref -match '^[0-9a-f]{7,40}$') {
+        return "https://github.com/$Slug/archive/$Ref.zip"
+    }
+    if ($Ref -match '^refs/(heads|tags)/') {
+        return "https://github.com/$Slug/archive/$Ref.zip"
+    }
+    return "https://github.com/$Slug/archive/refs/heads/$Ref.zip"
+}
+
+function Get-ArchiveCandidates {
+    $candidates = @()
+    $urls = @($RepoUrl)
     if ($env:DECKPILOT_REPO_MIRRORS) {
         foreach ($m in $env:DECKPILOT_REPO_MIRRORS -split ',') {
             $m = $m.Trim()
-            if ($m) { $mirrors += $m }
+            if ($m) { $urls += $m }
         }
     }
-    return $mirrors
+    foreach ($u in $urls) {
+        $slug = Get-RepoSlug $u
+        if ($slug) {
+            $candidates += (Get-ArchiveUrl $slug $Ref)
+        }
+    }
+    return $candidates
 }
 
-function Invoke-Clone {
+function Invoke-DownloadAndExtract {
     $target = $RepoDir
-    $mirrors = Get-Mirrors
-    foreach ($url in $mirrors) {
-        Write-Step "Cloning $url@$Ref -> $target"
-        try {
-            Invoke-Retry 3 {
-                if (Test-Path $target) { Remove-Item -Recurse -Force $target }
-                Invoke-Logged 'git clone' { git clone --depth=1 --branch $Ref $url $target }
-            }
-            Write-Ok "Cloned from $url"
-            return
-        } catch {
-            Write-Warn "Clone from $url failed after 3 attempts; trying next mirror (if any)."
-        }
+    $candidates = Get-ArchiveCandidates
+    if ($candidates.Count -eq 0) {
+        Write-Die "Could not derive a GitHub archive URL from RepoUrl=$RepoUrl. Set DECKPILOT_REPO_URL to a github.com URL."
     }
-    Write-Die "All clone targets failed. Check connectivity / DECKPILOT_REPO_URL / DECKPILOT_REPO_MIRRORS."
+
+    $tmpRoot = Join-Path $env:TEMP "deckpilot-install-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
+    try {
+        foreach ($url in $candidates) {
+            $zipPath = Join-Path $tmpRoot 'archive.zip'
+            $extractDir = Join-Path $tmpRoot 'extract'
+            Write-Step "Downloading $url"
+            try {
+                Invoke-Retry 3 {
+                    if (Test-Path $zipPath) { Remove-Item -Force $zipPath -ErrorAction SilentlyContinue }
+                    # Invoke-WebRequest uses Schannel (Windows cert store) which
+                    # accepts the corporate root CA that intercepts HTTPS in many
+                    # enterprises. This is why the zip path works on corp boxes
+                    # where Git for Windows' OpenSSL bundle fails TLS verify.
+                    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zipPath -TimeoutSec 60
+                }
+            } catch {
+                Add-LogLine "download $url failed: $($_.Exception.Message)"
+                Write-Warn "Download from $url failed; trying next mirror (if any)."
+                continue
+            }
+
+            try {
+                if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue }
+                New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+                Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+            } catch {
+                Write-Warn "Extract from $url failed: $($_.Exception.Message); trying next mirror (if any)."
+                continue
+            }
+
+            # GitHub puts everything under a single top-level dir named
+            # <repo>-<ref-without-prefix>. Move that to $target.
+            $inner = Get-ChildItem $extractDir | Where-Object PSIsContainer | Select-Object -First 1
+            if (-not $inner) {
+                Write-Warn "Zip from $url had unexpected contents; trying next mirror (if any)."
+                continue
+            }
+
+            if (Test-Path $target) { Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue }
+            $parent = Split-Path -Parent $target
+            if ($parent -and -not (Test-Path $parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            Move-Item -Path $inner.FullName -Destination $target
+            Write-Ok "Downloaded + extracted from $url"
+            return
+        }
+        Write-Die "All download targets failed. Check connectivity / DECKPILOT_REPO_URL / DECKPILOT_REPO_MIRRORS."
+    } finally {
+        Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-LockHash([string]$dir) {
+    $lock = Join-Path $dir 'package-lock.json'
+    if (Test-Path $lock) {
+        return (Get-FileHash $lock -Algorithm SHA1).Hash
+    }
+    return ''
 }
 
 function Invoke-Bootstrap {
     if (-not $Bootstrap) { return }
+
     $parent = Split-Path -Parent $RepoDir
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    if (Test-Path (Join-Path $RepoDir '.git')) {
-        Push-Location $RepoDir
-        try {
-            $script:RollbackSha = (git rev-parse HEAD).Trim()
-            $script:RollbackKind = 'update'
-            Write-Step "Updating existing clone at $RepoDir (ref: $Ref)"
-            Invoke-Retry 3 {
-                Invoke-Logged 'git fetch' { git fetch --depth=1 origin $Ref }
-                Invoke-Logged 'git checkout' { git checkout -q $Ref }
-                Invoke-Logged 'git reset' { git reset --hard "origin/$Ref" }
+
+    if (Test-Path $RepoDir) {
+        # Existing install. Snapshot for rollback + needs-install detection.
+        $script:OldLockHash = Get-LockHash $RepoDir
+        $backupDir = "$RepoDir.backup"
+        if (Test-Path $backupDir) { Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue }
+        # Rename rather than copy — fast and avoids doubling disk usage.
+        Rename-Item -Path $RepoDir -NewName (Split-Path -Leaf $backupDir)
+        $script:RollbackBackupDir = $backupDir
+        $script:RollbackKind = 'update'
+        Write-Step "Updating $RepoDir (ref: $Ref)"
+        Invoke-DownloadAndExtract
+        # Preserve node_modules from the previous install — Move is cheap.
+        $oldNm = Join-Path $backupDir 'node_modules'
+        if (Test-Path $oldNm) {
+            $newNm = Join-Path $RepoDir 'node_modules'
+            if (-not (Test-Path $newNm)) {
+                try {
+                    Move-Item -Path $oldNm -Destination $newNm
+                    Write-Note "(preserved node_modules from previous install)"
+                } catch {
+                    # Non-fatal — npm ci will repopulate.
+                }
             }
-            Write-Ok "Updated."
-        } catch {
-            Write-Die "Could not update $RepoDir. Run with -Reinstall to wipe + re-clone."
-        } finally {
-            Pop-Location
         }
     } else {
-        if ((Test-Path $RepoDir) -and (Get-ChildItem $RepoDir -Force | Select-Object -First 1)) {
-            Write-Die "$RepoDir exists and is not a git checkout. Set DECKPILOT_INSTALL_DIR or remove it."
-        }
         $script:RollbackKind = 'fresh'
-        Invoke-Clone
+        Invoke-DownloadAndExtract
     }
 }
 
@@ -439,6 +525,10 @@ function Test-IsUpdateMode {
         $script:IsUpdate = $true
         return
     }
+    if ($script:RollbackKind -eq 'update') {
+        $script:IsUpdate = $true
+        return
+    }
     $script:IsUpdate = $false
 }
 
@@ -446,15 +536,12 @@ function Test-IsUpdateMode {
 
 function Invoke-Build {
     $needInstall = $true
-    if ($IsUpdate -and $RollbackSha -and (Test-Path (Join-Path $RepoDir '.git'))) {
-        Push-Location $RepoDir
-        try {
-            git diff --quiet $RollbackSha HEAD -- package-lock.json
-            if ($LASTEXITCODE -eq 0) {
-                $needInstall = $false
-                Write-Note "(package-lock unchanged - skipping npm ci)"
-            }
-        } catch { } finally { Pop-Location }
+    if ($IsUpdate -and $script:OldLockHash) {
+        $newHash = Get-LockHash $RepoDir
+        if ($newHash -and ($newHash -eq $script:OldLockHash)) {
+            $needInstall = $false
+            Write-Note "(package-lock unchanged - skipping npm ci)"
+        }
     }
 
     if ($needInstall) {
@@ -509,10 +596,6 @@ function Invoke-LinkUser {
 
 function Invoke-LinkSystem {
     Write-Step "Linking system-wide (requires admin)"
-    # On Windows the "system" install is just npm link with admin privileges;
-    # the global prefix gets created under %ProgramData% or %ProgramFiles%
-    # depending on how Node was installed. The user just needs npm to be
-    # elevated; we shell out to npm and let it handle the placement.
     Push-Location $RepoDir
     try {
         Invoke-Logged 'npm link (system)' { npm link }
@@ -531,22 +614,23 @@ function Test-PathContains($bin) {
     if ($found) { return }
     Write-Warn "$bin is not on your PATH in this session."
     Write-Note "Add it permanently via:"
-    # NOTE: PowerShell uses backtick-quote inside a double-quoted string to
-    # produce a literal double quote, and backtick-dollar to suppress
-    # subexpression evaluation. $bin IS interpolated so the user
-    # copy-pastes the actual path.
+    # PowerShell quoting: backtick-quote escapes a literal " inside a
+    # double-quoted string; backtick-dollar suppresses subexpression eval.
+    # $bin IS interpolated so the user copy-pastes the actual path.
     Write-Note "  [Environment]::SetEnvironmentVariable('Path', `"`$([Environment]::GetEnvironmentVariable('Path','User'));$bin`", 'User')"
-    Write-Note "Or open a new shell — npm's install of Node typically adds it on first run."
+    Write-Note "Or open a new shell - npm's install of Node typically adds it on first run."
 }
 
 # ---------- uninstall ----------
 
 function Invoke-Uninstall {
     Write-Step "Uninstalling DeckPilot"
-    Push-Location $RepoDir -ErrorAction SilentlyContinue
-    try {
-        Invoke-Logged 'npm unlink -g' { npm unlink -g deckpilot } 2>$null
-    } catch { } finally { Pop-Location -ErrorAction SilentlyContinue }
+    if (Test-Path $RepoDir) {
+        Push-Location $RepoDir -ErrorAction SilentlyContinue
+        try {
+            Invoke-Logged 'npm unlink -g' { npm unlink -g deckpilot } 2>$null
+        } catch { } finally { Pop-Location -ErrorAction SilentlyContinue }
+    }
     $prefix = try { (npm prefix -g).Trim() } catch { $null }
     if ($prefix) {
         foreach ($f in @('deckpilot', 'deckpilot.cmd', 'deckpilot.ps1')) {
@@ -554,16 +638,13 @@ function Invoke-Uninstall {
             if (Test-Path $p) { Remove-Item -Force $p; Write-Ok "Removed $p" }
         }
     }
-    if ($Bootstrap -and (Test-Path (Join-Path $RepoDir '.git'))) {
+    if ($Bootstrap -and (Test-Path $RepoDir)) {
         Remove-Item -Recurse -Force $RepoDir
-        Write-Ok "Removed bootstrap checkout at $RepoDir"
+        Write-Ok "Removed install dir at $RepoDir"
     }
     Write-Ok "Done."
-    # IMPORTANT: do NOT call `exit` here. When this script is invoked via
-    # `iwr | iex`, `exit` terminates the host PowerShell session itself —
-    # the user's window closes and they can't see what just happened.
-    # Using `return` only exits this function; the caller (Invoke-Main)
-    # checks for $Uninstall and returns afterwards.
+    # Do NOT call exit here — under `iwr | iex` it terminates the host
+    # PowerShell session. `return` only exits this function.
     return
 }
 
@@ -573,7 +654,7 @@ function Test-Smoke {
     Write-Step "Smoke test"
     $dp = Get-Command deckpilot -ErrorAction SilentlyContinue
     if (-not $dp) {
-        Write-Warn "deckpilot not yet on PATH in this shell — open a new shell and run: deckpilot doctor"
+        Write-Warn "deckpilot not yet on PATH in this shell - open a new shell and run: deckpilot doctor"
         return
     }
     try {
@@ -585,9 +666,9 @@ function Test-Smoke {
 }
 
 function Invoke-Doctor {
-    if ($SkipDoctor) { Write-Note "(-SkipDoctor — verification skipped)"; return }
+    if ($SkipDoctor) { Write-Note "(-SkipDoctor - verification skipped)"; return }
     if (-not (Get-Command deckpilot -ErrorAction SilentlyContinue)) {
-        Write-Note "(doctor skipped — deckpilot not on PATH)"
+        Write-Note "(doctor skipped - deckpilot not on PATH)"
         return
     }
     Write-Step "Running deckpilot doctor"
@@ -596,18 +677,11 @@ function Invoke-Doctor {
         $output | ForEach-Object { Write-Host $_ }
         $output | ForEach-Object { Add-LogLine $_.ToString() }
     } catch {
-        # Doctor's non-zero exit is advisory — don't fail the install.
+        # Doctor's non-zero exit is advisory.
     }
 }
 
 # ---------- main ----------
-
-# Wrap the whole flow in a function. Critical for `iwr | iex` callers:
-# `exit` at the top level of a script invoked through Invoke-Expression
-# terminates the HOST PowerShell session, which makes the window close
-# before the user can see any error. Inside a function, `return` only
-# exits the function, and uncaught `throw` propagates as a normal error
-# without killing the session.
 
 function Invoke-Main {
     Write-Host "DeckPilot installer v$INSTALL_SCRIPT_VERSION" -ForegroundColor White
@@ -624,7 +698,6 @@ function Invoke-Main {
 
         Write-Step "Preflight"
         Test-Preflight-Node
-        Test-Preflight-Git
         Test-Preflight-Disk
         Test-Preflight-Network
         Test-Preflight-Deps
@@ -650,14 +723,19 @@ function Invoke-Main {
         Test-Smoke
         Invoke-Doctor
 
+        # Clean up the rollback backup on success.
+        if ($script:RollbackBackupDir -and (Test-Path $script:RollbackBackupDir)) {
+            Remove-Item -Recurse -Force $script:RollbackBackupDir -ErrorAction SilentlyContinue
+        }
+
         Write-Host ''
         if ($IsUpdate) {
             Write-Host "DeckPilot updated." -ForegroundColor White
         } else {
             Write-Host "DeckPilot is ready." -ForegroundColor White
         }
-        if ($Bootstrap) { Write-Host "  Source checkout: $RepoDir" }
-        Write-Host "  Install log:     $InstallLog"
+        if ($Bootstrap) { Write-Host "  Source:      $RepoDir" }
+        Write-Host "  Install log: $InstallLog"
         Write-Host "  Try: deckpilot            # open the menu"
         Write-Host "       deckpilot auth login # if you haven't authenticated Copilot CLI yet"
         Write-Host ''
@@ -665,8 +743,6 @@ function Invoke-Main {
         Write-Host "To uninstall: .\install.ps1 -Uninstall" -ForegroundColor DarkGray
     } catch {
         Invoke-Rollback
-        # Re-throw so the user sees the actual error message. PowerShell
-        # surfaces uncaught exceptions but does NOT terminate the session.
         throw
     }
 }
