@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.14.1'
+$INSTALL_SCRIPT_VERSION = '0.14.2'
 
 # ---------- globals ----------
 
@@ -558,7 +558,12 @@ function Invoke-Uninstall {
         Write-Ok "Removed bootstrap checkout at $RepoDir"
     }
     Write-Ok "Done."
-    exit 0
+    # IMPORTANT: do NOT call `exit` here. When this script is invoked via
+    # `iwr | iex`, `exit` terminates the host PowerShell session itself —
+    # the user's window closes and they can't see what just happened.
+    # Using `return` only exits this function; the caller (Invoke-Main)
+    # checks for $Uninstall and returns afterwards.
+    return
 }
 
 # ---------- verify ----------
@@ -596,59 +601,73 @@ function Invoke-Doctor {
 
 # ---------- main ----------
 
-Write-Host "DeckPilot installer v$INSTALL_SCRIPT_VERSION" -ForegroundColor White
+# Wrap the whole flow in a function. Critical for `iwr | iex` callers:
+# `exit` at the top level of a script invoked through Invoke-Expression
+# terminates the HOST PowerShell session, which makes the window close
+# before the user can see any error. Inside a function, `return` only
+# exits the function, and uncaught `throw` propagates as a normal error
+# without killing the session.
 
-Initialize-Log
-Add-LogLine "argv: $($args -join ' ')"
-Add-LogLine "RepoUrl=$RepoUrl Ref=$Ref RepoDir=$RepoDir Bootstrap=$Bootstrap Mode=$(if ($System) {'system'} else {'user'})"
+function Invoke-Main {
+    Write-Host "DeckPilot installer v$INSTALL_SCRIPT_VERSION" -ForegroundColor White
 
-try {
-    if ($Uninstall) {
-        Invoke-Uninstall
+    Initialize-Log
+    Add-LogLine "argv: $($args -join ' ')"
+    Add-LogLine "RepoUrl=$RepoUrl Ref=$Ref RepoDir=$RepoDir Bootstrap=$Bootstrap Mode=$(if ($System) {'system'} else {'user'})"
+
+    try {
+        if ($Uninstall) {
+            Invoke-Uninstall
+            return
+        }
+
+        Write-Step "Preflight"
+        Test-Preflight-Node
+        Test-Preflight-Git
+        Test-Preflight-Disk
+        Test-Preflight-Network
+        Test-Preflight-Deps
+
+        if ($MissingDeps.Count -gt 0) {
+            Install-Or-Hint-Deps
+        }
+
+        Invoke-Bootstrap
+
+        Test-IsUpdateMode
+        if ($IsUpdate) {
+            Write-Step "Update mode (existing install detected)"
+            Write-Note "Skipping link step. Re-run with -Reinstall to force the full path."
+        }
+
+        Invoke-Build
+
+        if (-not $IsUpdate) {
+            if ($System) { Invoke-LinkSystem } else { Invoke-LinkUser }
+        }
+
+        Test-Smoke
+        Invoke-Doctor
+
+        Write-Host ''
+        if ($IsUpdate) {
+            Write-Host "DeckPilot updated." -ForegroundColor White
+        } else {
+            Write-Host "DeckPilot is ready." -ForegroundColor White
+        }
+        if ($Bootstrap) { Write-Host "  Source checkout: $RepoDir" }
+        Write-Host "  Install log:     $InstallLog"
+        Write-Host "  Try: deckpilot            # open the menu"
+        Write-Host "       deckpilot auth login # if you haven't authenticated Copilot CLI yet"
+        Write-Host ''
+        Write-Host "To update:    .\install.ps1 -Update     (or just re-run this script)" -ForegroundColor DarkGray
+        Write-Host "To uninstall: .\install.ps1 -Uninstall" -ForegroundColor DarkGray
+    } catch {
+        Invoke-Rollback
+        # Re-throw so the user sees the actual error message. PowerShell
+        # surfaces uncaught exceptions but does NOT terminate the session.
+        throw
     }
-
-    Write-Step "Preflight"
-    Test-Preflight-Node
-    Test-Preflight-Git
-    Test-Preflight-Disk
-    Test-Preflight-Network
-    Test-Preflight-Deps
-
-    if ($MissingDeps.Count -gt 0) {
-        Install-Or-Hint-Deps
-    }
-
-    Invoke-Bootstrap
-
-    Test-IsUpdateMode
-    if ($IsUpdate) {
-        Write-Step "Update mode (existing install detected)"
-        Write-Note "Skipping link step. Re-run with -Reinstall to force the full path."
-    }
-
-    Invoke-Build
-
-    if (-not $IsUpdate) {
-        if ($System) { Invoke-LinkSystem } else { Invoke-LinkUser }
-    }
-
-    Test-Smoke
-    Invoke-Doctor
-
-    Write-Host ''
-    if ($IsUpdate) {
-        Write-Host "DeckPilot updated." -ForegroundColor White
-    } else {
-        Write-Host "DeckPilot is ready." -ForegroundColor White
-    }
-    if ($Bootstrap) { Write-Host "  Source checkout: $RepoDir" }
-    Write-Host "  Install log:     $InstallLog"
-    Write-Host "  Try: deckpilot            # open the menu"
-    Write-Host "       deckpilot auth login # if you haven't authenticated Copilot CLI yet"
-    Write-Host ''
-    Write-Host "To update:    .\install.ps1 -Update     (or just re-run this script)" -ForegroundColor DarkGray
-    Write-Host "To uninstall: .\install.ps1 -Uninstall" -ForegroundColor DarkGray
-} catch {
-    Invoke-Rollback
-    exit 1
 }
+
+Invoke-Main
