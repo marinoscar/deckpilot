@@ -77,3 +77,34 @@ describe('listSettableKeys', () => {
     expect(keys).toContain('assets.logo');
   });
 });
+
+describe('donorGeometry array-index patches', () => {
+  const spec = {
+    ...blankTemplate('with-donors'),
+    donorGeometry: [
+      { index: 0, name: 'Slide 1', summary: '', shapes: [] },
+      { index: 1, name: 'Slide 2', summary: 'old', shapes: [] },
+    ],
+  };
+
+  it('updates donorGeometry[N].summary via --set syntax', () => {
+    const next = applyPatches(spec, [
+      'donorGeometry[0].summary=Cover slide with photo backdrop',
+    ]);
+    expect(next.donorGeometry?.[0].summary).toBe('Cover slide with photo backdrop');
+    expect(next.donorGeometry?.[1].summary).toBe('old');
+  });
+
+  it('rejects out-of-range indices', () => {
+    expect(() =>
+      applyPatches(spec, ['donorGeometry[9].summary=oops']),
+    ).toThrow(TemplatePatchError);
+  });
+
+  it('rejects when donorGeometry is absent', () => {
+    const bare = blankTemplate('bare');
+    expect(() =>
+      applyPatches(bare, ['donorGeometry[0].summary=anything']),
+    ).toThrow(TemplatePatchError);
+  });
+});

@@ -96,8 +96,23 @@ export function applyOnePatch(spec: TemplateSpec, key: string, value: string): T
     const hasAny = Object.values(next).some((v) => v !== undefined && v !== '');
     return { ...spec, assets: hasAny ? next : undefined };
   }
+  // donorGeometry[N].summary — the only array-index path we support today.
+  const donorMatch = canonical.match(/^donorGeometry\[(\d+)\]\.summary$/);
+  if (donorMatch) {
+    const idx = Number(donorMatch[1]);
+    const current = spec.donorGeometry;
+    if (!current || idx < 0 || idx >= current.length) {
+      throw new TemplatePatchError(
+        `donorGeometry[${idx}] is out of range (${current?.length ?? 0} entries).`,
+      );
+    }
+    const next = current.map((d, i) =>
+      i === idx ? { ...d, summary: value } : d,
+    );
+    return { ...spec, donorGeometry: next };
+  }
   throw new TemplatePatchError(
-    `Unknown key "${key}". Settable keys: ${listSettableKeys().join(', ')}.`,
+    `Unknown key "${key}". Settable keys: ${listSettableKeys().join(', ')}. Also: donorGeometry[N].summary.`,
   );
 }
 

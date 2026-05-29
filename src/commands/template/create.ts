@@ -8,11 +8,12 @@ import { blankTemplate } from '../../template/spec.js';
 
 export default class TemplateCreate extends BaseCommand {
   static override description =
-    'Create a new DeckPilot template. With --from <pptx> the LLM examines the rendered slides (vision-driven) to author a rich TemplateSpec; --shallow keeps the older palette-only OOXML extractor. Without --from, a blank scaffold is created for you to edit.';
+    'Create a new DeckPilot template. With --from <pptx> the OOXML extractor pulls the source\'s brand master (logo + background + footer chrome), palette samples, and per-slide donor geometry; a vision-driven LLM pass then authors voice/copy/guidance + per-donor summaries. Pass --shallow to skip the LLM pass (OOXML only); --no-master / --no-donor-geometry to skip individual extraction steps for debug or token-budget control. Without --from, a blank scaffold is created.';
 
   static override examples = [
     '<%= config.bin %> template create acme-corp --from ./brand.pptx',
     '<%= config.bin %> template create acme-corp --from ./brand.pptx --shallow',
+    '<%= config.bin %> template create acme-corp --from ./brand.pptx --no-master',
     '<%= config.bin %> template create personal',
   ];
 
@@ -64,6 +65,28 @@ export default class TemplateCreate extends BaseCommand {
       min: 1,
       max: 60,
     }),
+    'no-master': Flags.boolean({
+      description:
+        "Skip extracting the source's brand master (background + logo + footer). Useful when a particular source master is too complex to translate cleanly.",
+      default: false,
+    }),
+    'no-donor-geometry': Flags.boolean({
+      description:
+        "Skip the per-slide donor-geometry catalog. Useful on huge source decks where the catalog would blow the LLM's system-prompt token budget.",
+      default: false,
+    }),
+    'no-palette-samples': Flags.boolean({
+      description: 'Skip per-slide palette aggregation. Theme palette still comes from theme1.xml.',
+      default: false,
+    }),
+    'max-donor-slides': Flags.integer({
+      description:
+        "Cap on slides walked when building the donor-geometry catalog. Default 40 (schema cap). Useful for tightly bounding the chat system-prompt size.",
+      required: false,
+      default: 40,
+      min: 1,
+      max: 40,
+    }),
   };
 
   async run(): Promise<void> {
@@ -98,9 +121,16 @@ export default class TemplateCreate extends BaseCommand {
 
     // ---- Source pptx + --shallow → OOXML-only, no LLM ----
     if (flags.shallow) {
+      // Pass templateRootDir so master extraction copies media (logo, bg) into
+      // assets/. The dir doesn't need to pre-exist; the extractor mkdirs.
       const spec = await templateFromPptx(slug, flags.from, {
         brand: flags.brand,
         description: flags.description,
+        templateRootDir: templateDir(slug),
+        extractMaster: !flags['no-master'],
+        extractPalette: !flags['no-palette-samples'],
+        extractDonorGeometry: !flags['no-donor-geometry'],
+        maxDonorSlides: flags['max-donor-slides'],
       });
       const { rootDir } = await saveTemplate(spec, { overwrite: flags.overwrite });
       this.log(`✓ Saved template "${slug}" (shallow) to ${rootDir}`);
@@ -109,6 +139,11 @@ export default class TemplateCreate extends BaseCommand {
     }
 
     // ---- Source pptx + vision pass (default) ----
+    if (flags['no-master'] || flags['no-donor-geometry'] || flags['no-palette-samples']) {
+      this.warn(
+        '--no-master / --no-donor-geometry / --no-palette-samples only affect the shallow OOXML path; the vision-driven extractor always runs full extraction. Pass --shallow to honour them.',
+      );
+    }
     this.log(`Extracting "${slug}" from ${flags.from} …`);
     const result = await extractTemplateFromPptx({
       name: slug,

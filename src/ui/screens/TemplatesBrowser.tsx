@@ -8,9 +8,11 @@ import {
   saveTemplate,
   templateExists,
 } from '../../store/templates.js';
+import { templateDir } from '../../store/paths.js';
 import { templateFromPptx } from '../../template/from-pptx.js';
 import { blankTemplate, summarizeTemplate } from '../../template/spec.js';
 import { Confirm } from '../menu/Confirm.js';
+import { type MenuItem, MenuList } from '../menu/MenuList.js';
 import { Panel } from '../menu/Panel.js';
 import { Spinner } from '../menu/Spinner.js';
 import { TextInput } from '../menu/TextInput.js';
@@ -20,6 +22,7 @@ type Mode =
   | { kind: 'browse' }
   | { kind: 'show'; entry: TemplateListEntry }
   | { kind: 'confirm-delete'; names: string[] }
+  | { kind: 'create-choice' }
   | { kind: 'create-name' }
   | { kind: 'create-pptx-name' }
   | { kind: 'create-pptx-path'; name: string };
@@ -119,10 +122,13 @@ export const TemplatesBrowser: React.FC<Props> = ({
       return;
     }
     if (input === 'n' || input === 'N') {
-      setMode({ kind: 'create-name' });
+      // v0.16: open the unified create wizard. Step 1 lets the user pick
+      // blank vs from-PPTX.
+      setMode({ kind: 'create-choice' });
       return;
     }
     if (input === 'i' || input === 'I') {
+      // Power-user shortcut: skip step 1, go straight to import-from-PPTX.
       setMode({ kind: 'create-pptx-name' });
       return;
     }
@@ -222,6 +228,42 @@ export const TemplatesBrowser: React.FC<Props> = ({
     );
   }
 
+  // ---- create wizard step 1: blank or from PPTX? ----
+  if (mode.kind === 'create-choice') {
+    type Choice = 'blank' | 'from-pptx';
+    const items: MenuItem<Choice>[] = [
+      {
+        value: 'blank',
+        label: 'Blank scaffold',
+        detail: 'Author a template by hand from a default starting point',
+        hotkey: 'b',
+      },
+      {
+        value: 'from-pptx',
+        label: 'From an existing .pptx',
+        detail: "Extract the source's brand master, palette, and layout vocabulary",
+        hotkey: 'p',
+      },
+    ];
+    return (
+      <Panel
+        title="New template"
+        subtitle="DeckPilot › Templates › New"
+        footer="↑/↓ navigate · Enter select · b/Esc back"
+      >
+        <MenuList
+          items={items}
+          twoColumn
+          onSelect={(choice) => {
+            if (choice === 'blank') setMode({ kind: 'create-name' });
+            else setMode({ kind: 'create-pptx-name' });
+          }}
+          onBack={() => setMode({ kind: 'browse' })}
+        />
+      </Panel>
+    );
+  }
+
   // ---- create from scratch ----
   if (mode.kind === 'create-name') {
     return (
@@ -310,7 +352,12 @@ export const TemplatesBrowser: React.FC<Props> = ({
           onCancel={() => setMode({ kind: 'browse' })}
           onSubmit={async (v) => {
             try {
-              const spec = await templateFromPptx(mode.name, v.trim());
+              // v0.16: pass templateRootDir so master extraction copies media
+              // (logo, background) into <root>/assets/. Same code path as
+              // `deckpilot template create --from <pptx> --shallow`.
+              const spec = await templateFromPptx(mode.name, v.trim(), {
+                templateRootDir: templateDir(mode.name),
+              });
               const { rootDir } = await saveTemplate(spec);
               setStatus(`Imported "${mode.name}" at ${rootDir}.`);
             } catch (e) {
