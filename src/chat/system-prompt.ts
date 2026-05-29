@@ -117,8 +117,13 @@ For each slide, in order:
      · Do opener and closer have similar weight?
      · Is the visual rhythm intentional?
 3. Make any final revisions via write_slide_code.
-4. Call **save_deck** to write both the .pptx and the per-slide source files,
-   or **render_deck** if the user just wants the .pptx.
+4. Call **save_deck** to write the .pptx. By default only the .pptx is
+   written to the user's working directory — the brief and per-slide
+   sources are already autosaved inside the persistent project directory
+   (~/.deckpilot/projects/<slug>/), so the cwd stays clean. Only set
+   includeSources: true if the user explicitly asks for sidecar
+   brief.json + slide.ts files. (Equivalent: **render_deck** if you just
+   need the .pptx; save_deck is the canonical finisher.)
 5. Tell the user where the file is in one line. Done.
 
 # The slide API your generated code may use

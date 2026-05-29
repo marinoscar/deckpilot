@@ -86,9 +86,9 @@ const SaveArgs = z.object({
     .describe('Where to write the .pptx. Defaults to ./<deck-title>.pptx.'),
   includeSources: z
     .boolean()
-    .default(true)
+    .default(false)
     .describe(
-      'When true, also writes <output>.brief.json and one <output>.<slideId>.slide.ts file per slide so the deck can be edited / re-rendered later.',
+      "When true, also writes <output>.brief.json and one <output>.<slideId>.slide.ts file per slide next to the .pptx. OFF by default — the brief and slide sources are already autosaved inside the persistent project directory under ~/.deckpilot/projects/<slug>/, so writing them next to the .pptx would just clutter the user's working directory. Only set true if the user explicitly asks for sidecar source files.",
     ),
 });
 
@@ -395,7 +395,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
 
     defineTool('save_deck', {
       description:
-        'Render the current DeckBrief + slide code to .pptx AND (by default) write a brief.json plus one .slide.ts per slide alongside it. The .ts files are re-runnable: each contains exactly the code you passed to write_slide_code.',
+        "Render the current DeckBrief + slide code to a single .pptx at the requested path (defaults to ./<title>.pptx). Only the .pptx is written to the user's working directory — the brief and per-slide TypeScript sources are always autosaved inside the persistent project directory (~/.deckpilot/projects/<slug>/) so the deck can be resumed or re-rendered later. Set includeSources: true only if the user explicitly asks for sidecar brief.json + slide.ts files next to the .pptx.",
       parameters: SaveArgs,
       skipPermission: true,
       handler: async (
