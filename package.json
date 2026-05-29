@@ -1,6 +1,6 @@
 {
   "name": "deckpilot",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Conversational CLI that turns chat into polished PowerPoint decks, powered by the GitHub Copilot SDK.",
   "license": "MIT",
   "type": "module",
@@ -25,6 +25,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "manifest": "oclif manifest",
+    "fixtures": "node --experimental-strip-types scripts/build-fixture.ts",
     "prepack": "npm run build && npm run manifest",
     "postpack": "rm -f oclif.manifest.json"
   },

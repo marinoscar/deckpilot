@@ -256,18 +256,40 @@ deckpilot start --model gpt-5 --critique-passes 5
 
 Create a new template. Without flags, a blank scaffold is written so you can
 fill in `template.json` by hand (or via `template edit`). With `--from
-<pptx>`, the LLM examines rendered slides (vision-driven) to author a rich
-TemplateSpec; `--shallow` keeps the older palette-only OOXML extractor.
+<pptx>`:
+
+1. The OOXML extractor pulls the source's **brand master** (background,
+   logo, footer chrome) into `template.master`, copies the media into
+   `assets/`, aggregates **paletteSamples** from every slide's colours,
+   and catalogs **donorGeometry** (each source slide's named-shape layout).
+2. The vision-driven LLM pass then authors `description`, `brand`,
+   `voiceHints`, `copyRules`, `guidance`, and a per-donor `summary`.
+3. The final template's `master` is applied automatically to every slide
+   DeckPilot generates from this template (via pptxgenjs's
+   `defineSlideMaster`), so brand chrome appears on every slide without the
+   code-gen LLM having to redraw it.
+
+`--shallow` skips the vision pass but still runs full OOXML extraction.
 
 | Flag | Description |
 | --- | --- |
-| `--from <pptx>` | Path to a source `.pptx` to extract theme + voice from. |
-| `--shallow` | Skip the vision pass; use only the deterministic OOXML theme parser. |
+| `--from <pptx>` | Path to a source `.pptx`. |
+| `--shallow` | Skip the vision LLM pass (OOXML only). |
+| `--no-master` | Skip the brand-master extraction (debug / fallback for sources with complex masters). |
+| `--no-donor-geometry` | Skip the per-slide donor catalog (token-budget control on huge decks). |
+| `--no-palette-samples` | Skip per-slide palette aggregation (theme palette still comes from theme1.xml). |
+| `--max-donor-slides <N>` | Cap donor-catalog slide count. Default 40 (schema cap). |
+| `--brand <name>` | Embed a brand name in the spec. |
+| `--description <text>` | Embed a one-line description. |
+| `--overwrite` | Replace an existing template's JSON (assets/ left alone). |
+| `--max-slides <N>` | Cap slides sent to the LLM in the vision pass. Default 20. |
 
 ```bash
-deckpilot template create acme-corp
 deckpilot template create acme-corp --from ./brand/acme.pptx
 deckpilot template create acme-corp --from ./brand/acme.pptx --shallow
+deckpilot template create acme-corp --from ./brand/acme.pptx --no-master
+deckpilot template create acme-corp --from ./brand/acme.pptx --shallow --max-donor-slides 12
+deckpilot template create personal     # blank scaffold
 ```
 
 ---
@@ -317,10 +339,17 @@ Edit a saved template. Two modes:
 | `assets.logo` | Path relative to the template dir. |
 | `assets.wordmark` | Same. |
 | `assets.background` | Same. |
+| `donorGeometry[N].summary` | One-line description of donor slide N. |
+
+> `master`, `paletteSamples`, and the geometric portion of `donorGeometry`
+> are populated by extraction and read-only via `--set`. To refresh them,
+> re-run `template create --from <pptx> --overwrite`. The `--editor` flow
+> can still edit any field by opening `template.json` directly.
 
 ```bash
 deckpilot template edit acme --set brand='Acme Corp'
 deckpilot template edit acme --set theme.accent=1A2B5E --set theme.tone=corporate
+deckpilot template edit acme --set "donorGeometry[0].summary=Cover with photo bg + title bottom-left"
 deckpilot template edit acme --editor
 deckpilot template edit acme           # implies --editor
 ```

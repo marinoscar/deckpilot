@@ -61,6 +61,60 @@ To share a template: zip the directory, send it, recipient unzips into their
 | `voiceHints`    | `string` ≤1024       | no       | 1-3 sentences nudging copy voice. Appended verbatim to the LLM's system prompt. |
 | `copyRules`     | `string` ≤2048       | no       | Bullet list of must/never rules. Appended verbatim. |
 | `guidance`      | `string` ≤4096       | no       | Long-form style guidance (composition habits, taboos, references). Appended verbatim. |
+| `master`        | `Master`             | no       | Brand chrome (background + logo / footer / rail objects) applied via pptxgenjs's `defineSlideMaster`. Populated by extraction from the source `.pptx`. See "Master" below. |
+| `paletteSamples`| array of 6-hex (≤12) | no       | Distinct colours used prominently across the source's slides, sorted by frequency. The code-gen LLM picks from this list for cards / chart series instead of inventing hexes. |
+| `donorGeometry` | array of `Donor` (≤40)| no      | Per-source-slide layout descriptors. The code-gen LLM sees these as the source deck's layout vocabulary. See "Donor geometry" below. |
+
+### `master` (v0.16+)
+
+When extraction populates `master`, the renderer calls
+`pres.defineSlideMaster({ title: 'TemplateMaster', background, objects })`
+once and uses `addSlide({ masterName: 'TemplateMaster' })` for every slide.
+PowerPoint composes the master with the slide at display time, so the
+master's background + objects appear on every generated slide automatically
+— the code-gen LLM never has to redraw them.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `background.type` | `'solid'` or `'image'` | Slide-wide background. `solid.color` is a 6-hex; `image.src` is a path relative to the template dir. |
+| `objects[*]` | discriminated union by `kind` | One per master shape. |
+| `objects[*].kind` | `'image'` / `'rect'` / `'text'` | The three master object shapes we know how to deterministically extract and re-emit. |
+| `objects[*].{x,y,w,h}` | numbers in inches | Position and size. |
+| `objects[*].src` | relative path | `image` only. Resolved at render-time against `<rootDir>`. |
+| `objects[*].fill` | 6-hex | `rect` only. |
+| `objects[*].text` | string | `text` only. Plus optional `fontFace`, `fontSize`, `bold`, `color`, `align`. |
+
+The extractor walks `ppt/slideMasters/slideMaster1.xml` first; if that has
+no chrome (which is true for pptxgenjs-emitted decks), it falls back to
+each `ppt/slideLayouts/slideLayoutN.xml` referenced by the master.
+
+### `paletteSamples` (v0.16+)
+
+Array of 6-hex strings (no `#`), capped at 12 entries, sorted by frequency
+descending. Walks every `ppt/slides/slideN.xml` and aggregates every
+`<a:srgbClr>` + theme-resolved `<a:schemeClr>` reference; near-duplicates
+(Δ < 5 in any RGB channel) collapse into one bucket.
+
+Surfaced to the code-gen LLM in the system prompt as the deck's "working
+palette" — the LLM uses these hexes for category cards, chart series,
+callouts, etc. instead of inventing new colours.
+
+### `donorGeometry` (v0.16+)
+
+Array (max 40) of per-source-slide layout descriptors. Each entry:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `index` | int | 0-based position in the source `.pptx`. Stable across template lifetime. |
+| `name` | string | Slide name (`<p:cSld name="...">`) or `"Slide N"`. |
+| `layoutName` | string | Source layout's name. |
+| `summary` | string | One-line description authored by the vision pass. The code-gen LLM scans these to pick the right donor when authoring. |
+| `shapes` | array (≤6) | The 6 visually heaviest shapes (by area), descending. Each has `name`, `kind`, `x`/`y`/`w`/`h` in inches, optional `placeholder`, `fontFace`, `fontSize`, `bold`, `fillColor`, `textColor`, `sampleText`. |
+
+The code-gen LLM is told (in the system prompt) that `donorGeometry` is a
+**starting library, not a constraint** — it can reproduce a donor's layout
+in pptxgenjs code or invent its own. The donor summaries are the most
+important field; geometry is for fidelity.
 
 ### `theme`
 
