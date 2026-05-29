@@ -44,9 +44,10 @@ export default class Doctor extends BaseCommand {
     checks.push({
       name: 'GitHub token resolvable',
       ok: token.source !== 'none' || hasCopilotKeychain,
-      detail: hasCopilotKeychain && token.source === 'none'
-        ? `source: copilot CLI keychain at ${copilotKeychainDir}`
-        : `source: ${describeTokenSource(token.source)}`,
+      detail:
+        hasCopilotKeychain && token.source === 'none'
+          ? `source: copilot CLI keychain at ${copilotKeychainDir}`
+          : `source: ${describeTokenSource(token.source)}`,
       hint:
         token.source === 'none' && !hasCopilotKeychain
           ? 'Run `deckpilot auth login` (or `copilot login`) to start the device-flow login.'
@@ -118,9 +119,7 @@ export default class Doctor extends BaseCommand {
       ok: previewOk,
       detail: previewDetail,
       soft: true,
-      hint: previewOk
-        ? undefined
-        : platformInstallHint(),
+      hint: previewOk ? undefined : platformInstallHint(),
     });
 
     for (const c of checks) {

@@ -1,3 +1,6 @@
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 /**
  * Smoke test for install.sh. We can't run the full installer in a vitest
  * worker (it touches $HOME, hits the network, requires sudo for deps), so
@@ -13,9 +16,6 @@
  *      the function definitions to a temp file and source only those.)
  */
 import { describe, expect, it } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 
 const repoRoot = join(__dirname, '..');
 const installSh = join(repoRoot, 'install.sh');
@@ -57,7 +57,7 @@ describe('install.sh', () => {
     const flagsHandled = new Set<string>();
     const caseBlock = text.match(/while \[ \$# -gt 0 \]; do[\s\S]+?done/);
     expect(caseBlock).not.toBeNull();
-    for (const m of (caseBlock![0]).matchAll(/--[a-z][a-z-]*/g)) {
+    for (const m of caseBlock![0].matchAll(/--[a-z][a-z-]*/g)) {
       flagsHandled.add(m[0]);
     }
     // -h is the short form of --help and lives in the case block only.

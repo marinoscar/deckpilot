@@ -1,6 +1,6 @@
 {
   "name": "deckpilot",
-  "version": "0.14.8",
+  "version": "0.15.0",
   "description": "Conversational CLI that turns chat into polished PowerPoint decks, powered by the GitHub Copilot SDK.",
   "license": "MIT",
   "type": "module",
@@ -61,6 +61,17 @@
       "@oclif/plugin-autocomplete"
     ],
     "topicSeparator": " ",
+    "topics": {
+      "config": {
+        "description": "Read or write persistent DeckPilot defaults (~/.deckpilot/config.json). Used by `start`, `chat`, and `resume` when no CLI flag is passed."
+      },
+      "project": {
+        "description": "Manage saved projects: list, show, rename, export, delete (single or bulk). Projects live at ~/.deckpilot/projects/<slug>/."
+      },
+      "template": {
+        "description": "Manage saved templates: list, show, create, edit, export, import, delete (single or bulk). Templates live at ~/.deckpilot/templates/<name>/."
+      }
+    },
     "hooks": {
       "init": "./dist/cli/hooks/init.js"
     }

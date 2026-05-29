@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 /**
  * Smoke test for install.ps1. We can't run PowerShell from this CI shell, so
  * the tests are strictly defensive:
@@ -11,8 +13,6 @@
  * Real syntax validation happens the first time a Windows user runs it.
  */
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 const repoRoot = join(__dirname, '..');
 const installPs1 = join(repoRoot, 'install.ps1');
