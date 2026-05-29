@@ -27,7 +27,10 @@ import {
 import { TemplateNotFoundError, loadTemplate as loadNamedTemplate } from '../store/templates.js';
 import { inspectTemplate } from '../template/inspect.js';
 import type { TemplateProfile } from '../template/profile.js';
-import { summarizeTemplate as summarizeTemplateProfile } from '../template/profile.js';
+import {
+  profileFromResolved,
+  summarizeTemplate as summarizeTemplateProfile,
+} from '../template/profile.js';
 import type { ResolvedTemplate } from '../template/spec.js';
 import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
@@ -276,6 +279,11 @@ export class ChatSession {
   async useNamedTemplate(name: string): Promise<ResolvedTemplate> {
     const resolved = await loadNamedTemplate(name);
     this.resolvedTemplate = resolved;
+    // Surface the resolved spec to the renderer-visible field too — that's
+    // how master inheritance + paletteSamples reach renderDeck() at save time.
+    const profile = profileFromResolved(resolved);
+    this.template = profile;
+    for (const fn of this.templateListeners) fn(profile);
     if (this.project) {
       this.project.manifest = { ...this.project.manifest, templateName: name };
       this.dirtyManifest = true;
@@ -947,10 +955,21 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
   ];
   if (template.brand) lines.push(`Brand: ${template.brand}.`);
   if (template.description) lines.push(`Description: ${template.description}`);
+
+  // v0.16: the master is applied by the renderer via pptxgenjs's
+  // defineSlideMaster. Make the LLM aware so it doesn't redraw the chrome.
+  if (template.master) {
+    lines.push(
+      '',
+      '### Brand master is already on every slide',
+      "The template's logo, background, and persistent chrome (logo, footer band, side rails, etc.) are painted by the renderer's slide master BEFORE your code runs. Add the body content — titles, body text, charts, lists, accents — but DO NOT redraw the logo, repaint the background, or recreate the footer. They're already there.",
+    );
+  }
+
   if (template.assets?.logo) {
     lines.push(
       '',
-      `Logo available at \`theme.assets.logo\` (absolute path: ${template.assets.logo}). Place via slide.addImage({ path: theme.assets.logo, ... }).`,
+      `Logo available at \`theme.assets.logo\` (absolute path: ${template.assets.logo}). Place via slide.addImage({ path: theme.assets.logo, ... }) ONLY if the slide-specific design calls for an additional logo on top of the master's brand chrome.`,
     );
   }
   if (template.assets?.wordmark) {
@@ -958,6 +977,50 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
       `Wordmark available at \`theme.assets.wordmark\` (absolute path: ${template.assets.wordmark}).`,
     );
   }
+
+  // Working palette — extracted hexes from across the source deck. Even
+  // when accent / accentAlt are set on the theme, this list often carries
+  // category-card / chart-series colours the LLM needs.
+  if (template.paletteSamples && template.paletteSamples.length > 0) {
+    lines.push(
+      '',
+      '### Working palette',
+      "Pick colours for category cards, chart series, callouts, etc. from this list (sorted by how prominently the source deck uses them) instead of inventing hexes:",
+      `  ${template.paletteSamples.map((h) => `#${h}`).join(', ')}`,
+    );
+  }
+
+  // Source layout vocabulary — donor slides the code-gen LLM can reproduce
+  // or extend. Compact-table format keeps the token cost predictable.
+  if (template.donorGeometry && template.donorGeometry.length > 0) {
+    lines.push('', '### Source layout vocabulary');
+    lines.push(
+      "Each entry below describes one source slide's layout — its named shapes (with positions in inches, fonts, fills, and sample text). When authoring a slide, pick the donor whose layout matches your slide's purpose, then write pptxgenjs code that reproduces (or extends) it. You're free to invent new layouts too; this is a starting library, not a constraint.",
+    );
+    for (const d of template.donorGeometry) {
+      const head = d.summary
+        ? `${d.name} — ${d.summary}`
+        : `${d.name}${d.layoutName ? ` (layout: ${d.layoutName})` : ''}`;
+      lines.push('', `- **${head}**`);
+      for (const s of d.shapes) {
+        const segs: string[] = [];
+        segs.push(`x=${s.x}, y=${s.y}, w=${s.w}, h=${s.h}`);
+        if (s.placeholder) segs.push(`ph=${s.placeholder}`);
+        if (s.fontFace || s.fontSize) {
+          const font = [s.fontFace, s.fontSize ? `${s.fontSize}pt` : undefined]
+            .filter(Boolean)
+            .join(' ');
+          if (font) segs.push(font);
+        }
+        if (s.bold) segs.push('bold');
+        if (s.fillColor) segs.push(`fill=#${s.fillColor}`);
+        if (s.textColor) segs.push(`text=#${s.textColor}`);
+        if (s.sampleText) segs.push(`"${s.sampleText}"`);
+        lines.push(`    - \`${s.name}\` (${s.kind}): ${segs.join(' · ')}`);
+      }
+    }
+  }
+
   if (template.voiceHints) {
     lines.push('', '### Voice hints', template.voiceHints);
   }
