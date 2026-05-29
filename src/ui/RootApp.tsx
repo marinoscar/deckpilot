@@ -5,6 +5,7 @@ import { ChatSession } from '../chat/session.js';
 import { createClient } from '../copilot/client.js';
 import type { ProjectListEntry } from '../store/projects.js';
 import type { TemplateListEntry } from '../store/templates.js';
+import { type TemplateSpec, blankTemplate } from '../template/spec.js';
 import { App as ChatApp } from './App.js';
 import { AuthErrorBanner } from './screens/AuthErrorBanner.js';
 import { Help } from './screens/Help.js';
@@ -12,14 +13,16 @@ import { MainMenu } from './screens/MainMenu.js';
 import { NewDeck } from './screens/NewDeck.js';
 import { ProjectsBrowser } from './screens/ProjectsBrowser.js';
 import { Settings } from './screens/Settings.js';
+import { TemplateEditor } from './screens/TemplateEditor.js';
 import { TemplatesBrowser } from './screens/TemplatesBrowser.js';
 
 type StartOpts = { projectName?: string; templateName?: string };
 
 type View =
   | { kind: 'main' }
-  | { kind: 'projects' }
+  | { kind: 'projects'; mode: 'resume' | 'manage' }
   | { kind: 'templates' }
+  | { kind: 'template-editor'; mode: 'create' | 'edit'; initial: TemplateSpec }
   | { kind: 'new-deck' }
   | { kind: 'settings' }
   | { kind: 'help' }
@@ -118,20 +121,16 @@ export const RootApp: React.FC<Props> = ({
     return (
       <MainMenu
         busy={busy}
-        onPick={(choice, payload) => {
+        onPick={(choice) => {
           switch (choice) {
             case 'start':
               setView({ kind: 'new-deck' });
               return;
             case 'resume':
-              if (payload?.projectName) {
-                void startChat({ projectName: payload.projectName });
-              } else {
-                setView({ kind: 'projects' });
-              }
+              setView({ kind: 'projects', mode: 'resume' });
               return;
             case 'projects':
-              setView({ kind: 'projects' });
+              setView({ kind: 'projects', mode: 'manage' });
               return;
             case 'templates':
               setView({ kind: 'templates' });
@@ -154,6 +153,7 @@ export const RootApp: React.FC<Props> = ({
   if (view.kind === 'projects') {
     return (
       <ProjectsBrowser
+        mode={view.mode}
         onOpen={(entry: ProjectListEntry) =>
           void startChat({ projectName: entry.name, templateName: entry.manifest.templateName })
         }
@@ -167,6 +167,21 @@ export const RootApp: React.FC<Props> = ({
       <TemplatesBrowser
         onUseAndStart={(entry: TemplateListEntry) => void startChat({ templateName: entry.name })}
         onBack={back}
+        onEdit={(entry) => setView({ kind: 'template-editor', mode: 'edit', initial: entry.spec })}
+        onCreateNew={(name) =>
+          setView({ kind: 'template-editor', mode: 'create', initial: blankTemplate(name) })
+        }
+      />
+    );
+  }
+
+  if (view.kind === 'template-editor') {
+    return (
+      <TemplateEditor
+        mode={view.mode}
+        initial={view.initial}
+        onSaved={() => setView({ kind: 'templates' })}
+        onCancel={() => setView({ kind: 'templates' })}
       />
     );
   }

@@ -12,12 +12,14 @@ import { templateFromPptx } from '../../template/from-pptx.js';
 import { blankTemplate, summarizeTemplate } from '../../template/spec.js';
 import { Confirm } from '../menu/Confirm.js';
 import { Panel } from '../menu/Panel.js';
+import { Spinner } from '../menu/Spinner.js';
 import { TextInput } from '../menu/TextInput.js';
+import { Theme } from '../theme.js';
 
 type Mode =
   | { kind: 'browse' }
   | { kind: 'show'; entry: TemplateListEntry }
-  | { kind: 'confirm-delete'; entry: TemplateListEntry }
+  | { kind: 'confirm-delete'; names: string[] }
   | { kind: 'create-name' }
   | { kind: 'create-pptx-name' }
   | { kind: 'create-pptx-path'; name: string };
@@ -25,31 +27,94 @@ type Mode =
 type Props = {
   onUseAndStart: (entry: TemplateListEntry) => void;
   onBack: () => void;
+  /** Optional callback to open the in-TUI template editor on a template. */
+  onEdit?: (entry: TemplateListEntry) => void;
+  /**
+   * Optional callback to open the editor on a brand-new blank scaffold under
+   * `name`. When provided, the `n` flow asks for a name then routes here
+   * instead of saving a stub immediately.
+   */
+  onCreateNew?: (name: string) => void;
 };
 
 const SLUG = /^[a-z0-9-]+$/;
 
-export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => {
+export const TemplatesBrowser: React.FC<Props> = ({
+  onUseAndStart,
+  onBack,
+  onEdit,
+  onCreateNew,
+}) => {
   const [entries, setEntries] = useState<TemplateListEntry[] | null>(null);
   const [index, setIndex] = useState(0);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<Mode>({ kind: 'browse' });
   const [status, setStatus] = useState<string | undefined>();
+  const [filter, setFilter] = useState<string>('');
+  const [searching, setSearching] = useState<boolean>(false);
 
   async function refresh(): Promise<void> {
     const list = await listTemplates();
     setEntries(list);
-    if (index >= list.length) setIndex(Math.max(0, list.length - 1));
+    setIndex((i) => Math.max(0, Math.min(i, list.length - 1)));
+    setChecked((prev) => {
+      const valid = new Set(list.map((e) => e.name));
+      const next = new Set<string>();
+      for (const name of prev) if (valid.has(name)) next.add(name);
+      return next;
+    });
   }
 
   useEffect(() => {
     void refresh();
   }, []);
 
+  const visible = (entries ?? []).filter((e) => matchesTemplateFilter(e, filter));
+
   useInput((input, key) => {
     if (mode.kind !== 'browse') return;
     if (!entries) return;
 
-    if (key.escape || input === 'b') {
+    // --- search mode ---
+    if (searching) {
+      if (key.escape) {
+        setSearching(false);
+        setFilter('');
+        setIndex(0);
+        return;
+      }
+      if (key.return) {
+        setSearching(false);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setFilter((f) => f.slice(0, -1));
+        setIndex(0);
+        return;
+      }
+      if (key.ctrl || key.meta || key.tab) return;
+      if (input && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
+        setFilter((f) => f + input);
+        setIndex(0);
+      }
+      return;
+    }
+
+    // --- normal browse mode ---
+    if (key.escape) {
+      if (filter) {
+        setFilter('');
+        setIndex(0);
+        return;
+      }
+      onBack();
+      return;
+    }
+    if (input === '/') {
+      setSearching(true);
+      return;
+    }
+    if (input === 'b') {
       onBack();
       return;
     }
@@ -61,19 +126,31 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
       setMode({ kind: 'create-pptx-name' });
       return;
     }
-    if (entries.length === 0) return;
+    if (visible.length === 0) return;
 
     if (key.upArrow) setIndex((i) => Math.max(0, i - 1));
-    else if (key.downArrow) setIndex((i) => Math.min(entries.length - 1, i + 1));
+    else if (key.downArrow) setIndex((i) => Math.min(visible.length - 1, i + 1));
     else if (key.return) {
-      const entry = entries[index];
+      const entry = visible[index];
       if (entry) onUseAndStart(entry);
     } else if (input === 's' || input === 'S') {
-      const entry = entries[index];
+      const entry = visible[index];
       if (entry) setMode({ kind: 'show', entry });
+    } else if ((input === 'e' || input === 'E') && onEdit) {
+      const entry = visible[index];
+      if (entry) onEdit(entry);
+    } else if (input === ' ') {
+      const entry = visible[index];
+      if (!entry) return;
+      setChecked((prev) => {
+        const next = new Set(prev);
+        if (next.has(entry.name)) next.delete(entry.name);
+        else next.add(entry.name);
+        return next;
+      });
     } else if (input === 'd' || input === 'D') {
-      const entry = entries[index];
-      if (entry) setMode({ kind: 'confirm-delete', entry });
+      const names = checked.size > 0 ? [...checked] : visible[index] ? [visible[index]!.name] : [];
+      if (names.length > 0) setMode({ kind: 'confirm-delete', names });
     }
   });
 
@@ -82,7 +159,7 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
     return (
       <Panel
         title={`Template · ${mode.entry.name}`}
-        subtitle={mode.entry.rootDir}
+        subtitle={`DeckPilot › Templates › ${mode.entry.name}`}
         footer="any key to go back"
       >
         <TemplateDetail entry={mode.entry} />
@@ -91,21 +168,51 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
     );
   }
 
-  // ---- confirm delete ----
+  // ---- confirm delete (single or bulk) ----
   if (mode.kind === 'confirm-delete') {
+    const names = mode.names;
+    const question =
+      names.length === 1
+        ? `Permanently delete template "${names[0]}"?`
+        : `Permanently delete ${names.length} templates? This cannot be undone.`;
     return (
-      <Panel title="Delete template" subtitle={mode.entry.name} accent="red">
+      <Panel
+        title={names.length === 1 ? 'Delete template' : `Delete ${names.length} templates`}
+        subtitle="DeckPilot › Templates › Delete"
+        accent="red"
+      >
+        {names.length > 1 ? (
+          <Box flexDirection="column" marginBottom={1}>
+            {names.map((n) => (
+              <Text key={n} dimColor>
+                {`  · ${n}`}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
         <Confirm
-          question={`Permanently delete template "${mode.entry.name}"?`}
+          question={question}
           danger
           onResolve={async (yes) => {
             if (yes) {
-              try {
-                await deleteTemplate(mode.entry.name);
-                setStatus(`Deleted "${mode.entry.name}".`);
-              } catch (e) {
-                setStatus(`Delete failed: ${(e as Error).message}`);
+              const failures: string[] = [];
+              for (const name of names) {
+                try {
+                  await deleteTemplate(name);
+                } catch (e) {
+                  failures.push(`${name}: ${(e as Error).message}`);
+                }
               }
+              if (failures.length === 0) {
+                setStatus(
+                  names.length === 1
+                    ? `Deleted "${names[0]}".`
+                    : `Deleted ${names.length} templates.`,
+                );
+              } else {
+                setStatus(`Some deletes failed: ${failures.join('; ')}`);
+              }
+              setChecked(new Set());
               await refresh();
             }
             setMode({ kind: 'browse' });
@@ -120,7 +227,7 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
     return (
       <Panel
         title="Create template"
-        subtitle="from scratch — fill the JSON afterward"
+        subtitle="DeckPilot › Templates › New"
         footer="Enter create · Esc cancel"
       >
         <TextInput
@@ -140,9 +247,16 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
               setMode({ kind: 'browse' });
               return;
             }
+            if (onCreateNew) {
+              // Hand off to the parent (which will open the editor on a blank
+              // scaffold). The editor saves on submit; we don't save here.
+              setMode({ kind: 'browse' });
+              onCreateNew(name);
+              return;
+            }
             try {
               const { rootDir } = await saveTemplate(blankTemplate(name));
-              setStatus(`Created "${name}" at ${rootDir}. Edit template.json + drop assets/.`);
+              setStatus(`Created "${name}" at ${rootDir}. Press e to edit, or drop assets/.`);
             } catch (e) {
               setStatus(`Create failed: ${(e as Error).message}`);
             }
@@ -159,7 +273,7 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
     return (
       <Panel
         title="Import template from .pptx"
-        subtitle="step 1 of 2 — template name"
+        subtitle="DeckPilot › Templates › Import (1 of 2)"
         footer="Enter next · Esc cancel"
       >
         <TextInput
@@ -186,7 +300,7 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
     return (
       <Panel
         title="Import template from .pptx"
-        subtitle={`step 2 of 2 — pick the .pptx for "${mode.name}"`}
+        subtitle={`DeckPilot › Templates › Import (2 of 2) — "${mode.name}"`}
         footer="Enter import · Esc cancel"
       >
         <TextInput
@@ -211,50 +325,100 @@ export const TemplatesBrowser: React.FC<Props> = ({ onUseAndStart, onBack }) => 
   }
 
   // ---- main browser ----
+  const breadcrumb = 'DeckPilot › Templates';
+
   if (entries === null) {
     return (
-      <Panel title="Templates" subtitle="loading …">
-        <Text dimColor>reading ~/.deckpilot/templates/ …</Text>
+      <Panel title="Templates" subtitle={breadcrumb}>
+        <Spinner label="Reading ~/.deckpilot/templates/" />
       </Panel>
     );
   }
 
-  const footer =
-    entries.length === 0
-      ? 'n new (from scratch) · i import from .pptx · b/Esc back'
-      : '↑/↓ navigate · Enter use & start · s show · d delete · n new · i import · b/Esc back';
+  const footer = buildFooter(entries.length, checked.size, !!onEdit, searching, !!filter);
+
+  const subtitleParts = [breadcrumb, `${entries.length} saved`];
+  if (filter) subtitleParts.push(`filter: "${filter}" → ${visible.length} match`);
 
   return (
-    <Panel title="Templates" subtitle={`${entries.length} saved`} footer={footer}>
+    <Panel title="Templates" subtitle={subtitleParts.join(' · ')} footer={footer}>
       {entries.length === 0 ? (
         <Text dimColor>
           No templates saved yet under ~/.deckpilot/templates/.{'\n'}
-          Press <Text color="cyanBright">n</Text> to scaffold a blank one, or{' '}
-          <Text color="cyanBright">i</Text> to import from an existing .pptx.
+          Press <Text color={Theme.primary}>n</Text> to scaffold a blank one, or{' '}
+          <Text color={Theme.primary}>i</Text> to import from an existing .pptx.
         </Text>
+      ) : visible.length === 0 ? (
+        <Text dimColor>no templates match "{filter}"</Text>
       ) : (
         <Box flexDirection="column">
-          {entries.map((e, i) => {
+          {visible.map((e, i) => {
             const active = i === index;
+            const isChecked = checked.has(e.name);
             const marker = active ? '▸' : ' ';
+            const checkbox = isChecked ? '[✓] ' : '[ ] ';
             return (
               <Box key={e.name} justifyContent="space-between">
-                <Text color={active ? 'cyanBright' : undefined} bold={active}>
-                  {marker} {summarizeTemplate(e.spec)}
+                <Text
+                  color={active ? Theme.primary : isChecked ? Theme.success : undefined}
+                  bold={active}
+                >
+                  {marker} {checkbox}
+                  {summarizeTemplate(e.spec)}
                 </Text>
               </Box>
             );
           })}
         </Box>
       )}
+      {searching ? (
+        <Box marginTop={1}>
+          <Text color={Theme.primary}>/{filter}</Text>
+          <Text color={Theme.muted}>▌</Text>
+        </Box>
+      ) : null}
       {status ? (
         <Box marginTop={1}>
-          <Text color="yellow">{status}</Text>
+          <Text
+            color={
+              status.toLowerCase().includes('failed') ||
+              status.toLowerCase().includes('already exists')
+                ? Theme.error
+                : Theme.warn
+            }
+          >
+            {status}
+          </Text>
         </Box>
       ) : null}
     </Panel>
   );
 };
+
+function buildFooter(
+  count: number,
+  checkedCount: number,
+  withEdit: boolean,
+  searching: boolean,
+  hasFilter: boolean,
+): string {
+  if (searching) return 'type to filter · Enter accept · Esc clear & exit';
+  if (count === 0) return 'n new (from scratch) · i import from .pptx · b/Esc back';
+  const editPart = withEdit ? ' · e edit' : '';
+  const backLabel = hasFilter ? 'Esc clear filter · b back' : 'b/Esc back';
+  if (checkedCount > 0) {
+    return `↑/↓ · Enter use · Space toggle · d delete (${checkedCount})${editPart} · s show · n new · i import · / search · ${backLabel}`;
+  }
+  return `↑/↓ · Enter use · Space select · d delete${editPart} · s show · n new · i import · / search · ${backLabel}`;
+}
+
+function matchesTemplateFilter(entry: TemplateListEntry, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  const hay =
+    `${entry.name} ${entry.spec.brand ?? ''} ${entry.spec.description ?? ''}`.toLowerCase();
+  return hay.includes(needle);
+}
 
 const TemplateDetail: React.FC<{ entry: TemplateListEntry }> = ({ entry }) => {
   const s = entry.spec;

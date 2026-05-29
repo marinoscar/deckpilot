@@ -16,26 +16,31 @@ export type MainChoice =
 
 type Props = {
   busy?: boolean;
-  onPick: (choice: MainChoice, payload?: { projectName?: string }) => void;
+  onPick: (choice: MainChoice) => void;
 };
 
 const TAGLINE = 'conversational PowerPoint, powered by GitHub Copilot';
 
 export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
-  const [lastProject, setLastProject] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [projectCount, setProjectCount] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void listProjects().then((list) => {
       if (cancelled) return;
-      setLastProject(list[0]?.name ?? null);
-      setLoading(false);
+      setProjectCount(list.length);
     });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const resumeDetail =
+    projectCount === null
+      ? 'Loading saved projects…'
+      : projectCount === 0
+        ? 'No saved projects yet'
+        : `${projectCount} saved · newest first`;
 
   const items: MenuItem<MainChoice>[] = [
     {
@@ -44,20 +49,13 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
       detail: 'Open chat and build a deck from scratch',
       hotkey: 's',
     },
-    lastProject
-      ? {
-          value: 'resume',
-          label: `Resume "${lastProject}"`,
-          detail: 'Pick up where you left off, with full LLM memory',
-          hotkey: 'r',
-        }
-      : {
-          value: 'resume',
-          label: 'Resume a deck',
-          detail: loading ? 'Loading saved projects…' : 'No saved projects yet',
-          hotkey: 'r',
-          separator: !loading && !lastProject ? true : undefined,
-        },
+    {
+      value: 'resume',
+      label: 'Resume a deck',
+      detail: resumeDetail,
+      hotkey: 'r',
+      separator: projectCount === 0 ? true : undefined,
+    },
     {
       value: 'projects',
       label: 'Manage projects',
@@ -96,15 +94,7 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
       subtitle={TAGLINE}
       footer="↑/↓ navigate · Enter select · letter shortcut to jump · q quit"
     >
-      <MenuList
-        items={items}
-        onSelect={(choice) =>
-          choice === 'resume' && lastProject
-            ? onPick('resume', { projectName: lastProject })
-            : onPick(choice)
-        }
-        twoColumn
-      />
+      <MenuList items={items} onSelect={(choice) => onPick(choice)} twoColumn />
       {busy ? (
         <Box marginTop={1}>
           <Text color="yellow">starting session …</Text>
