@@ -31,6 +31,108 @@ const RelativePath = z
   });
 const Guidance = z.string().max(4096);
 
+// Six hex digits, no leading #. Same shape as ThemeSchema's hex fields so the
+// LLM and our parsers see one canonical format everywhere.
+const HexColor = z
+  .string()
+  .regex(/^[0-9a-fA-F]{6}$/, 'Hex colour without leading # — six hex digits, e.g. "1A2B5E".');
+
+// Numeric position/size, in inches. Matches pptxgenjs's units. We allow a
+// generous range so extracted shapes from non-standard slide sizes still fit.
+const Inches = z.number().finite().min(-100).max(100);
+
+/**
+ * Brand-master objects we know how to deterministically extract from a source
+ * .pptx AND re-emit via pptxgenjs's `defineSlideMaster({ objects })`. The list
+ * is intentionally narrow — only shapes the renderer can faithfully reproduce.
+ */
+export const MasterObjectSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('image'),
+    src: RelativePath,
+    x: Inches,
+    y: Inches,
+    w: Inches,
+    h: Inches,
+  }),
+  z.object({
+    kind: z.literal('rect'),
+    x: Inches,
+    y: Inches,
+    w: Inches,
+    h: Inches,
+    fill: HexColor,
+  }),
+  z.object({
+    kind: z.literal('text'),
+    text: z.string().min(1).max(240),
+    x: Inches,
+    y: Inches,
+    w: Inches,
+    h: Inches,
+    fontFace: z.string().min(1).max(64).optional(),
+    fontSize: z.number().int().min(4).max(200).optional(),
+    bold: z.boolean().optional(),
+    color: HexColor.optional(),
+    align: z.enum(['left', 'center', 'right']).optional(),
+  }),
+]);
+export type MasterObject = z.infer<typeof MasterObjectSchema>;
+
+export const MasterBackgroundSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('solid'), color: HexColor }),
+  z.object({ type: z.literal('image'), src: RelativePath }),
+]);
+export type MasterBackground = z.infer<typeof MasterBackgroundSchema>;
+
+/**
+ * Brand chrome applied via pptxgenjs's slide master. When present, the
+ * renderer calls `defineSlideMaster` once and every generated slide inherits
+ * these visuals automatically — the LLM no longer needs to redraw the logo,
+ * background, or footer band in slide code.
+ */
+export const MasterSchema = z
+  .object({
+    background: MasterBackgroundSchema.optional(),
+    objects: z.array(MasterObjectSchema).max(32).optional(),
+  })
+  .refine(
+    (m) => m.background !== undefined || (m.objects?.length ?? 0) > 0,
+    { message: 'master must define at least one of background or objects.' },
+  );
+export type Master = z.infer<typeof MasterSchema>;
+
+/**
+ * One source-slide layout descriptor. The vision pass authors `summary`; the
+ * OOXML extractor authors everything else. Shown to the code-gen LLM at chat
+ * time as the source deck's "layout vocabulary".
+ */
+export const DonorShapeSchema = z.object({
+  name: z.string().min(1).max(120),
+  kind: z.enum(['text', 'image', 'rect', 'table', 'chart', 'group', 'other']),
+  x: Inches,
+  y: Inches,
+  w: Inches,
+  h: Inches,
+  placeholder: z.string().min(1).max(40).optional(),
+  fontFace: z.string().min(1).max(64).optional(),
+  fontSize: z.number().int().min(4).max(200).optional(),
+  bold: z.boolean().optional(),
+  fillColor: HexColor.optional(),
+  textColor: HexColor.optional(),
+  sampleText: z.string().max(120).optional(),
+});
+export type DonorShape = z.infer<typeof DonorShapeSchema>;
+
+export const DonorGeometrySchema = z.object({
+  index: z.number().int().min(0).max(999),
+  name: z.string().min(1).max(120),
+  layoutName: z.string().min(1).max(120).optional(),
+  summary: z.string().max(240).default(''),
+  shapes: z.array(DonorShapeSchema).max(6),
+});
+export type DonorGeometry = z.infer<typeof DonorGeometrySchema>;
+
 export const TemplateAssetsSchema = z.object({
   logo: RelativePath.optional().describe(
     'Primary brand mark. Path relative to the template dir, e.g. "assets/logo.png".',
@@ -64,6 +166,23 @@ export const TemplateSpecSchema = z.object({
   guidance: Guidance.optional().describe(
     'Long-form style guidance — composition habits, taboos, references. Appended to the system prompt.',
   ),
+  master: MasterSchema.optional().describe(
+    'Brand chrome applied via pptxgenjs defineSlideMaster — logo, background, footer band. When present, every generated slide inherits these automatically.',
+  ),
+  paletteSamples: z
+    .array(HexColor)
+    .max(12)
+    .optional()
+    .describe(
+      'Distinct colours the source deck uses prominently (cards, chart series, etc.). The code-gen LLM picks from this list instead of inventing.',
+    ),
+  donorGeometry: z
+    .array(DonorGeometrySchema)
+    .max(40)
+    .optional()
+    .describe(
+      "Per-source-slide layout descriptors. The code-gen LLM sees this as the source deck's layout vocabulary and reproduces or extends entries when authoring.",
+    ),
 });
 export type TemplateSpec = z.infer<typeof TemplateSpecSchema>;
 

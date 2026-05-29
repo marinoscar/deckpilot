@@ -141,3 +141,176 @@ describe('template store (round-trip)', () => {
     expect(loaded.assets?.logo).toBeUndefined();
   });
 });
+
+describe('TemplateSpec — master / paletteSamples / donorGeometry (v0.16)', () => {
+  const base = {
+    name: 'rich',
+    theme: { accent: '1A2B5E', accentAlt: 'C8202E' },
+  };
+
+  it('accepts a master with a solid background and a single rect object', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      master: {
+        background: { type: 'solid', color: '0A1A3E' },
+        objects: [{ kind: 'rect', x: 12, y: 0, w: 1.333, h: 7.5, fill: '000000' }],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a master with an image background and an image object', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      master: {
+        background: { type: 'image', src: 'assets/master-background.png' },
+        objects: [
+          { kind: 'image', src: 'assets/master-image-0.png', x: 0.4, y: 0.3, w: 1.2, h: 0.6 },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a master with no background AND no objects', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      master: { objects: [] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a master image object whose src tries to escape', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      master: {
+        objects: [{ kind: 'image', src: '../etc/passwd', x: 0, y: 0, w: 1, h: 1 }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unknown master object kinds', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      master: {
+        objects: [{ kind: 'circle', x: 0, y: 0, w: 1, h: 1, fill: '000000' }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects bad hex colours in master.background.solid', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      master: { background: { type: 'solid', color: 'NOTHEX' } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts paletteSamples up to 12 entries', () => {
+    const samples = Array.from({ length: 12 }, (_, i) =>
+      i.toString(16).padStart(6, '0').toUpperCase(),
+    );
+    const result = TemplateSpecSchema.safeParse({ ...base, paletteSamples: samples });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects paletteSamples with more than 12 entries', () => {
+    const samples = Array.from({ length: 13 }, () => 'AABBCC');
+    const result = TemplateSpecSchema.safeParse({ ...base, paletteSamples: samples });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects paletteSamples containing non-hex strings', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      paletteSamples: ['AABBCC', 'rgb(0,0,0)'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a donorGeometry entry with named shapes', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      donorGeometry: [
+        {
+          index: 0,
+          name: 'Cover',
+          layoutName: 'Title Slide',
+          summary: 'Cover with photo bg + title bottom-left',
+          shapes: [
+            {
+              name: 'Title',
+              kind: 'text',
+              x: 0.6,
+              y: 5.5,
+              w: 12,
+              h: 1.2,
+              placeholder: 'Title',
+              fontFace: 'Inter Tight',
+              fontSize: 56,
+              bold: true,
+              textColor: 'FFFFFF',
+              sampleText: 'Knowledge graphs',
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('defaults donorGeometry[].summary to an empty string when omitted', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      donorGeometry: [
+        { index: 0, name: 'Slide 1', shapes: [] },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.donorGeometry?.[0].summary).toBe('');
+    }
+  });
+
+  it('caps donorGeometry shape array at 6 entries', () => {
+    const tooManyShapes = Array.from({ length: 7 }, (_, i) => ({
+      name: `Shape${i}`,
+      kind: 'text' as const,
+      x: 0,
+      y: 0,
+      w: 1,
+      h: 1,
+    }));
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      donorGeometry: [{ index: 0, name: 'Crowded', shapes: tooManyShapes }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('caps donorGeometry array at 40 entries', () => {
+    const tooManyDonors = Array.from({ length: 41 }, (_, i) => ({
+      index: i,
+      name: `Slide ${i}`,
+      shapes: [],
+    }));
+    const result = TemplateSpecSchema.safeParse({ ...base, donorGeometry: tooManyDonors });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects donorGeometry shape kinds outside the allowed enum', () => {
+    const result = TemplateSpecSchema.safeParse({
+      ...base,
+      donorGeometry: [
+        {
+          index: 0,
+          name: 'Slide 1',
+          shapes: [{ name: 'Mystery', kind: 'video' as never, x: 0, y: 0, w: 1, h: 1 }],
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+});
