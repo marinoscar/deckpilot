@@ -5,7 +5,8 @@ import React from 'react';
 import { ChatSession } from '../chat/session.js';
 import { BaseCommand } from '../cli/base-command.js';
 import { createClient } from '../copilot/client.js';
-import { listTemplates } from '../store/templates.js';
+import { loadConfig } from '../store/config.js';
+import { listTemplates, templateExists } from '../store/templates.js';
 import { App } from '../ui/App.js';
 import { TemplatePicker } from '../ui/TemplatePicker.js';
 
@@ -55,9 +56,8 @@ export default class Start extends BaseCommand {
     }),
     'critique-passes': Flags.integer({
       description:
-        'How many render_slide_preview passes the model is allowed per slide (0 disables the visual critique loop). Default 3, max 5.',
+        'How many render_slide_preview passes the model is allowed per slide (0 disables the visual critique loop). Default 3 unless overridden by `deckpilot config set critique-passes <n>`; max 5.',
       required: false,
-      default: 3,
       min: 0,
       max: 5,
     }),
@@ -66,6 +66,8 @@ export default class Start extends BaseCommand {
   async run(): Promise<void> {
     const { args, flags } = await this.parse(Start);
 
+    const cfg = await loadConfig();
+
     let templateName: string | undefined;
     let templatePath: string | undefined;
     if (flags.template) {
@@ -73,6 +75,12 @@ export default class Start extends BaseCommand {
         templateName = flags.template;
       } else {
         templatePath = flags.template;
+      }
+    } else if (cfg.defaults.template) {
+      // Config default applies when the user passed no --template. Verify the
+      // template still exists on disk; if not, fall through to the picker.
+      if (await templateExists(cfg.defaults.template)) {
+        templateName = cfg.defaults.template;
       }
     }
 
@@ -83,13 +91,16 @@ export default class Start extends BaseCommand {
       }
     }
 
+    const critiquePasses = flags['critique-passes'] ?? cfg.defaults.critiquePassesPerSlide ?? 3;
+    const model = flags.model ?? cfg.defaults.model;
+
     const dp = createClient({ gitHubToken: flags.token });
     const session = new ChatSession(dp, {
-      model: flags.model,
+      model,
       templatePath,
       templateName,
       projectName: args.project,
-      critiquePassesPerSlide: flags['critique-passes'],
+      critiquePassesPerSlide: critiquePasses,
     });
 
     try {

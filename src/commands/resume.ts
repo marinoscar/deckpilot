@@ -5,6 +5,7 @@ import React from 'react';
 import { ChatSession } from '../chat/session.js';
 import { BaseCommand } from '../cli/base-command.js';
 import { createClient } from '../copilot/client.js';
+import { loadConfig } from '../store/config.js';
 import { projectExists } from '../store/projects.js';
 import { App } from '../ui/App.js';
 
@@ -44,6 +45,8 @@ export default class Resume extends BaseCommand {
       );
     }
 
+    const cfg = await loadConfig();
+
     let templateName: string | undefined;
     let templatePath: string | undefined;
     if (flags.template) {
@@ -53,11 +56,13 @@ export default class Resume extends BaseCommand {
         templatePath = flags.template;
       }
     }
+    // For resume, the saved project's own templateName takes precedence over
+    // config defaults — we only fall back to config.defaults.model.
 
     const dp = createClient({ gitHubToken: flags.token });
     const session = new ChatSession(dp, {
       projectName: args.project,
-      model: flags.model,
+      model: flags.model ?? cfg.defaults.model,
       templateName,
       templatePath,
     });
