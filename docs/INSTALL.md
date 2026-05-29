@@ -41,7 +41,7 @@ into a **fast update mode** when it detects an existing install.
 ## How it runs
 
 ```
-DeckPilot installer v0.13.0
+DeckPilot installer v0.16.0
 · Preflight
 ✓ Node 22.22.1
 ✓ Disk: 14823 MB free in /home/you/.deckpilot
@@ -233,6 +233,6 @@ it there). Usually a slow registry / corporate proxy.
 
 **I want to install a specific version / branch**
 ```bash
-DECKPILOT_REF=v0.12.0 ./install.sh         # tag
+DECKPILOT_REF=v0.16.0 ./install.sh         # tag
 DECKPILOT_REF=feature/x ./install.sh       # branch
 ```

@@ -4,7 +4,9 @@
 
 Have a normal conversation in your terminal — DeckPilot proposes the outline, lets you approve it, then writes the rendering code for every slide itself, looking at the rendered PNGs and revising until each one is good. Output: a real `.pptx` you can hand off.
 
-> **Status:** v0.12 — vision-driven brand extraction (`template create --from brand.pptx` reads your slides via LLM vision and writes a rich `TemplateSpec`), a top-level TUI menu when you run `deckpilot` with no args, auto-saving projects with full Copilot session resume, and a trust pass on the chat surface (visible tool errors, clickable preview file links, autosave indicator, auth preflight banner).
+> **Status:** v0.16 — faithful brand reproduction. `template create --from brand.pptx` extracts the source's slide master (logo, background, footer chrome), aggregates the working palette from every slide, and catalogs each slide's named-shape layout as a "vocabulary" the code-gen LLM scans when authoring. Every slide DeckPilot generates from a template inherits the brand chrome automatically via pptxgenjs's `defineSlideMaster` — you stop seeing the LLM redraw your logo on every slide.
+>
+> Also in v0.15+: persistent CLI defaults (`deckpilot config get/set`), full TUI ↔ CLI parity (every menu action has a CLI sibling), template edit/export/import + project rename/export, an in-TUI template editor with `/` search and multi-select, and a comprehensive `docs/CLI-REFERENCE.md`.
 
 ---
 
@@ -185,19 +187,30 @@ A **template** is a reusable style + voice spec stored at `~/.deckpilot/template
 ### Three ways to create one
 
 ```bash
-# 1. Vision-driven from an existing brand .pptx  ← new in v0.12
+# 1. From an existing brand .pptx (recommended) — v0.16
 deckpilot template create acme --from ~/AcmeBrand.pptx
-#    The LLM renders every slide, looks at them via vision, and writes a
-#    rich TemplateSpec — palette, fonts, tone, plus dense `guidance` text
-#    with quoted observations ("covers full-bleed photography with a
-#    1-line title bottom-left in 56pt sans"). Needs LibreOffice + auth.
+#    The OOXML extractor pulls:
+#      - the source's brand master (background, logo, footer chrome),
+#        copying media into ~/.deckpilot/templates/acme/assets/
+#      - paletteSamples — every distinct hex the source uses prominently
+#        (cards, chart series, accents) sorted by frequency, capped at 12
+#      - donorGeometry — each source slide's named-shape layout catalog
+#        (positions in inches, fonts, fills, sample text)
+#    Then a vision-driven LLM pass authors voiceHints, copyRules,
+#    guidance, and a one-line summary per donor slide.
+#    Needs LibreOffice + Copilot auth for the LLM pass.
 
-# 2. Shallow OOXML-only from a .pptx (no LLM, palette+fonts only)
+# 2. Shallow — OOXML extraction only (no LLM, fast)
 deckpilot template create acme --from ~/AcmeBrand.pptx --shallow
+#    Same master / paletteSamples / donorGeometry as above; voice / copy /
+#    guidance left empty for you to fill in.
 
 # 3. Blank scaffold to hand-edit
 deckpilot template create personal
 ```
+
+Bounded extraction for huge source decks: `--max-donor-slides 12`,
+`--no-donor-geometry`, `--no-master`, `--no-palette-samples`.
 
 ### Use a template
 
@@ -206,13 +219,26 @@ deckpilot start client-deck --template acme       # CLI flag
 # or pick from the startup TUI list, or run `/template acme` mid-session
 ```
 
-The template's theme (palette + fonts + tone + aspect) drives every slide; its optional `voiceHints` / `copyRules` / `guidance` text is folded into the LLM's system prompt as binding guidance.
+When the template carries a `master`, the renderer calls pptxgenjs's
+`defineSlideMaster` once and references it from every slide — the logo,
+background, and footer chrome are composed by PowerPoint at display time
+and appear on every slide automatically. The code-gen LLM is told not to
+redraw them. The `paletteSamples` and `donorGeometry` show up in the LLM's
+system prompt as the "working palette" and "source layout vocabulary" —
+the LLM picks colours and starting layouts from them instead of inventing.
+
+The template's optional `voiceHints` / `copyRules` / `guidance` text is folded into the system prompt as binding guidance.
 
 ### Manage templates
 
 ```bash
 deckpilot template list
-deckpilot template show acme
+deckpilot template show acme                     # shows master, paletteSamples, donorGeometry, ...
+deckpilot template edit acme --set brand='Acme Corp'
+deckpilot template edit acme --set "donorGeometry[0].summary=Cover with photo bg + title bottom-left"
+deckpilot template edit acme --editor            # open template.json in $EDITOR / notepad
+deckpilot template export acme ./acme.zip        # share with a teammate
+deckpilot template import ./acme.zip --name acme-fork
 deckpilot template delete acme --yes
 ```
 
@@ -287,24 +313,38 @@ DECKPILOT.md is **per-cwd-tree** ("rules for whatever I'm building in this folde
 
 ## All top-level commands
 
+See `docs/CLI-REFERENCE.md` for the long-form reference (every flag,
+every config key, examples). The map:
+
 ```bash
 deckpilot                            # open the TUI menu
 deckpilot start [<name>]             # start a new deck (alias: chat)
 deckpilot resume <name>              # resume a saved project with full LLM memory
-deckpilot project list               # list saved projects
-deckpilot project show <name>
-deckpilot project delete <name> --yes
-deckpilot template list              # list saved templates
-deckpilot template show <name>
-deckpilot template create <name>     # blank scaffold (or --from <pptx> for vision-driven)
-deckpilot template create <name> --from <pptx>           # vision-driven extraction
-deckpilot template create <name> --from <pptx> --shallow # OOXML-only, no LLM
-deckpilot template delete <name> --yes
 deckpilot render <brief.json>        # headless render (CI, scripting)
-deckpilot doctor                     # preflight diagnostics
-deckpilot auth status                # show Copilot auth state
-deckpilot auth login                 # device-flow login
-deckpilot auth logout
+
+# Projects — saved chats with autosaved brief + slide code + transcript
+deckpilot project list
+deckpilot project show <name>
+deckpilot project rename <old> <new>
+deckpilot project export <name> [<zip>]
+deckpilot project delete <name> [<name> ...] --yes      # bulk-delete
+
+# Templates — reusable brand specs (theme + master + voice/copy/guidance)
+deckpilot template list
+deckpilot template show <name>
+deckpilot template create <name> [--from <pptx>] [--shallow]
+deckpilot template edit <name> [--set k=v ...] [--editor]
+deckpilot template export <name> [<zip>]
+deckpilot template import <zip> [--name <new>]
+deckpilot template delete <name> [<name> ...] --yes
+
+# Persistent defaults at ~/.deckpilot/config.json
+deckpilot config list
+deckpilot config get|set|unset <key>
+
+# Auth + diagnostics
+deckpilot auth status|login|logout
+deckpilot doctor                     # Node version, Copilot SDK, LibreOffice, $EDITOR
 deckpilot models                     # list models the Copilot SDK exposes
 deckpilot version
 deckpilot help [cmd]                 # detailed per-command help
@@ -366,7 +406,11 @@ rm -rf ~/.deckpilot           # projects + templates + config; irreversible
 - ✅ **v0.9** — Pivot to **code-gen**: the LLM writes per-slide TypeScript against a frozen pptxgenjs surface, executed in a `vm` sandbox. Presets retired.
 - ✅ **v0.10** — Persistent **projects** + **named templates** (auto-save + Copilot SDK session resume + reusable brand specs).
 - ✅ **v0.11** — Top-level **TUI menu** (`deckpilot` with no args), `start` / `resume` commands, ink-rendered template picker.
-- ✅ **v0.12 (current)** — **Vision-driven brand extraction** (`template create --from brand.pptx` reads slides via LLM vision and writes a rich TemplateSpec). Trust-UX sweep: visible tool errors, clickable preview file links, autosave indicator, auth-error banner, Phase 1 gate hardened.
+- ✅ **v0.12** — **Vision-driven brand extraction** (`template create --from brand.pptx`). Trust-UX sweep: visible tool errors, clickable preview file links, autosave indicator, auth-error banner.
+- ✅ **v0.13** — Bundled DesignSystem presets, expanded glyph set, DECKPILOT.md per-directory style guide.
+- ✅ **v0.14** — Native **Windows support** (`install.ps1`), corporate-proxy-safe zip-download bootstrap, cross-platform-binding rule across the codebase, PowerShell 5.1 compatibility.
+- ✅ **v0.15** — Persistent CLI defaults (`deckpilot config`), **full TUI ↔ CLI parity**: every menu action has a CLI sibling (`template edit/export/import`, `project rename/export`, bulk-delete via varargs). In-TUI template editor with `/` search, multi-select, breadcrumbs, spinners. Comprehensive `docs/CLI-REFERENCE.md`. `save_deck` no longer clutters the working directory.
+- ✅ **v0.16 (current)** — Faithful brand reproduction. `template create --from <pptx>` extracts the source's brand **master** (background + logo + footer chrome), **paletteSamples** (working palette across all slides), and **donorGeometry** (per-slide layout vocabulary). The renderer applies the master via pptxgenjs's `defineSlideMaster` so every generated slide inherits brand chrome automatically — the code-gen LLM never redraws the logo. Unified create wizard in the TUI; `--no-master` / `--no-donor-geometry` / `--max-donor-slides` flags for control.
 
 ## License
 
