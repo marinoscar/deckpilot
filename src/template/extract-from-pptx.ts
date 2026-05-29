@@ -16,10 +16,12 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createClient } from '../copilot/client.js';
 import { isPreviewAvailable } from '../render/pptx-to-pngs.js';
+import { templateDir } from '../store/paths.js';
 import { saveTemplate as saveNamedTemplate } from '../store/templates.js';
 import { buildExtractTools } from '../tools/extract.js';
 import { EXTRACT_SYSTEM_PROMPT } from './extract-prompt.js';
 import { templateFromPptx } from './from-pptx.js';
+import type { TemplateSpec } from './spec.js';
 
 export class ExtractionError extends Error {
   constructor(
@@ -84,6 +86,27 @@ export async function extractTemplateFromPptx(
     return shallowFallback(opts, 'LibreOffice not found on PATH');
   }
 
+  // v0.16: pre-extract OOXML BEFORE booting the LLM session. The master,
+  // paletteSamples, and donor geometry positions come from this; the LLM's
+  // job in the session is the creative fields (voice/copy/guidance) plus
+  // per-donor summaries.
+  let preExtracted: TemplateSpec | undefined;
+  try {
+    preExtracted = await templateFromPptx(opts.name, opts.pptxPath, {
+      brand: opts.brand,
+      description: opts.description,
+      templateRootDir: templateDir(opts.name),
+    });
+  } catch (e) {
+    // Pre-extraction failure is non-fatal — the LLM session can still author
+    // a spec from images alone. Log via the fallback signal.
+    opts.onProgress?.({
+      kind: 'fallback',
+      reason: `OOXML pre-extraction failed; vision session will run without it: ${(e as Error).message}`,
+    });
+    preExtracted = undefined;
+  }
+
   let savedDir: string | null = null;
 
   const tools = buildExtractTools({
@@ -91,6 +114,7 @@ export async function extractTemplateFromPptx(
     pptxPath: absPptx,
     overwrite: opts.overwrite ?? false,
     maxSlides: opts.maxSlides ?? 20,
+    preExtracted,
     onSaved: (dir) => {
       savedDir = dir;
       opts.onProgress?.({ kind: 'saved', path: dir });
@@ -183,6 +207,7 @@ async function shallowFallback(
   const spec = await templateFromPptx(opts.name, opts.pptxPath, {
     brand: opts.brand,
     description: opts.description,
+    templateRootDir: templateDir(opts.name),
   });
   const { rootDir } = await saveNamedTemplate(spec, { overwrite: opts.overwrite ?? false });
   return { savedPath: rootDir, vision: false };
