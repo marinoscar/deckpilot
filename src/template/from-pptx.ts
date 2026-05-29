@@ -11,10 +11,29 @@ import { basename } from 'node:path';
 import { inspectTemplate } from './inspect.js';
 import { type TemplateSpec, TemplateSpecSchema } from './spec.js';
 
+export type TemplateFromPptxOpts = {
+  description?: string;
+  brand?: string;
+  /**
+   * Template directory on disk. When provided, master extraction copies
+   * media (logo, background image) into `<templateRootDir>/assets/`. The CLI
+   * command supplies this; the LLM tool (which doesn't write to disk) leaves
+   * it undefined and gets master.objects without image entries.
+   */
+  templateRootDir?: string;
+  /** Opt-outs for the v0.16 extractors (CLI --no-* flags). */
+  extractMaster?: boolean;
+  extractPalette?: boolean;
+  extractDonorGeometry?: boolean;
+  maxDonorSlides?: number;
+  maxShapesPerDonor?: number;
+};
+
 /**
  * Build a TemplateSpec from a .pptx on disk. Palette, fonts, and aspect are
- * pulled from the OOXML; everything else (assets, voice, brand) is left
- * empty for the user to fill in.
+ * pulled from the OOXML theme; master chrome, paletteSamples, and the donor
+ * geometry catalog come from the v0.16 extractors. Everything else (voice,
+ * copy, brand) is left empty for the user to fill in.
  *
  * The returned spec is validated; the caller decides where to write it (the
  * CLI command writes via `saveTemplate`, the LLM tool writes via
@@ -23,9 +42,16 @@ import { type TemplateSpec, TemplateSpecSchema } from './spec.js';
 export async function templateFromPptx(
   name: string,
   pptxPath: string,
-  opts: { description?: string; brand?: string } = {},
+  opts: TemplateFromPptxOpts = {},
 ): Promise<TemplateSpec> {
-  const profile = await inspectTemplate(pptxPath);
+  const profile = await inspectTemplate(pptxPath, {
+    templateRootDir: opts.templateRootDir,
+    extractMaster: opts.extractMaster,
+    extractPalette: opts.extractPalette,
+    extractDonorGeometry: opts.extractDonorGeometry,
+    maxDonorSlides: opts.maxDonorSlides,
+    maxShapesPerDonor: opts.maxShapesPerDonor,
+  });
 
   const aspect: '16:9' | '4:3' = profile.aspect === '4:3' ? '4:3' : '16:9';
 
@@ -47,6 +73,9 @@ export async function templateFromPptx(
       tone: 'editorial' as const,
       aspect,
     },
+    ...(profile.master ? { master: profile.master } : {}),
+    ...(profile.paletteSamples ? { paletteSamples: profile.paletteSamples } : {}),
+    ...(profile.donorGeometry ? { donorGeometry: profile.donorGeometry } : {}),
   };
 
   const parsed = TemplateSpecSchema.safeParse(draft);

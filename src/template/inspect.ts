@@ -2,6 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
+import { extractDonorGeometry } from './donor-geometry.js';
+import { extractMasterFromPptx } from './master-extract.js';
+import { aggregatePalette, readThemeSchemeMap } from './palette-aggregate.js';
 import type { TemplateProfile } from './profile.js';
 
 /**
@@ -25,15 +28,40 @@ const xmlParser = new XMLParser({
 });
 
 /**
- * Parse a user-supplied `.pptx` into a TemplateProfile. Reads three OOXML
- * parts: theme/theme1.xml (colours + fonts), presentation.xml (slide size),
- * slideMasters + slideLayouts (layout names).
+ * Options for inspectTemplate.
+ *
+ * - `templateRootDir`: when provided, master extraction copies media (logo,
+ *   background image) into `<templateRootDir>/assets/`. Without it, media
+ *   refs are skipped (the master shape still captures solid backgrounds and
+ *   rect/text objects).
+ * - `extractMaster` / `extractPalette` / `extractDonorGeometry`: per-feature
+ *   opt-outs for the CLI flags `--no-master`, `--no-palette-samples`,
+ *   `--no-donor-geometry`. All default true.
+ * - `maxDonorSlides` / `maxShapesPerDonor`: bound the donor catalog size.
+ */
+export type InspectOpts = {
+  templateRootDir?: string;
+  extractMaster?: boolean;
+  extractPalette?: boolean;
+  extractDonorGeometry?: boolean;
+  maxDonorSlides?: number;
+  maxShapesPerDonor?: number;
+};
+
+/**
+ * Parse a user-supplied `.pptx` into a TemplateProfile. Reads OOXML parts:
+ * theme/theme1.xml (colours + fonts), presentation.xml (slide size),
+ * slideMasters + slideLayouts (layout names + brand chrome), every
+ * slide<N>.xml (palette samples + donor geometry).
  *
  * Failure modes are non-fatal where possible: a missing field falls back to
  * FALLBACK or a reasonable inference. A genuinely unparseable file
  * (not a zip, not a pptx, corrupt XML) throws with a clear message.
  */
-export async function inspectTemplate(path: string): Promise<TemplateProfile> {
+export async function inspectTemplate(
+  path: string,
+  opts: InspectOpts = {},
+): Promise<TemplateProfile> {
   const abs = resolve(process.cwd(), path);
   const buf = await readFile(abs);
   let zip: JSZip;
@@ -50,7 +78,7 @@ export async function inspectTemplate(path: string): Promise<TemplateProfile> {
   const { colors, fonts } = await readThemeAndFonts(zip);
   const layoutNames = await readLayoutNames(zip);
 
-  return {
+  const profile: TemplateProfile = {
     sourcePath: abs,
     aspect: aspect.aspect,
     slideSize: aspect.size,
@@ -58,6 +86,32 @@ export async function inspectTemplate(path: string): Promise<TemplateProfile> {
     fonts,
     layoutNames,
   };
+
+  // v0.16 enrichments — each is independently opt-out via opts.
+  if (opts.extractMaster !== false) {
+    const { master, copiedAssets } = await extractMasterFromPptx(zip, opts.templateRootDir);
+    if (master) profile.master = master;
+    if (copiedAssets.length > 0) profile.copiedAssets = copiedAssets;
+  }
+
+  // Palette + donor geometry both need the theme scheme map. Build it once.
+  const needScheme = opts.extractPalette !== false || opts.extractDonorGeometry !== false;
+  const scheme = needScheme ? await readThemeSchemeMap(zip) : {};
+
+  if (opts.extractPalette !== false) {
+    const samples = await aggregatePalette(zip, scheme);
+    if (samples.length > 0) profile.paletteSamples = samples;
+  }
+
+  if (opts.extractDonorGeometry !== false) {
+    const donors = await extractDonorGeometry(zip, scheme, {
+      maxSlides: opts.maxDonorSlides,
+      maxShapesPerSlide: opts.maxShapesPerDonor,
+    });
+    if (donors.length > 0) profile.donorGeometry = donors;
+  }
+
+  return profile;
 }
 
 async function readSlideSize(
