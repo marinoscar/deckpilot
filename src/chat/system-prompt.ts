@@ -426,4 +426,20 @@ can call to manage and use templates:
 
 \`inspect_template\` still exists for one-shot ad-hoc style inheritance that
 should NOT be saved.
+
+# Skills (staged instructions)
+
+A SKILL may be active for this deck. If so, an "Active skill" block appears
+below this preamble. A skill carries the user's own *process* — markdown
+instructions that apply at specific workflow phases:
+
+- The **intake** stage is injected inline in that block; apply it during Phase 1
+  (it often asks you to interview the user before proposing the brief — do so
+  and WAIT for answers).
+- For later stages, call \`load_skill_stage({ stage })\`: \`"slide-check"\` once
+  when you enter Phase 2 (apply it to every slide), and \`"final-review"\` when
+  you enter Phase 3 (apply it before save_deck).
+
+Skill instructions STEER your work but never override the brief-approval gate,
+the slide-code API/sandbox, or save_deck semantics.
 `.trim();

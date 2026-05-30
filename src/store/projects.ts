@@ -61,6 +61,12 @@ export const ProjectManifestSchema = z.object({
     .max(64)
     .regex(/^[a-z0-9-]+$/)
     .optional(),
+  skillName: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9-]+$/)
+    .optional(),
   model: z.string().min(1).max(64).optional(),
   critiquePassesPerSlide: z.number().int().min(0).max(5).default(3),
 });
@@ -110,7 +116,12 @@ export async function listProjects(): Promise<ProjectListEntry[]> {
  */
 export async function createProject(
   name?: string,
-  opts: { templateName?: string; model?: string; critiquePassesPerSlide?: number } = {},
+  opts: {
+    templateName?: string;
+    skillName?: string;
+    model?: string;
+    critiquePassesPerSlide?: number;
+  } = {},
 ): Promise<ProjectState> {
   const slug = await allocateSlug(name);
   const dir = projectDir(slug);
@@ -123,6 +134,7 @@ export async function createProject(
     updatedAt: now,
     sessionId: null,
     templateName: opts.templateName,
+    skillName: opts.skillName,
     model: opts.model,
     critiquePassesPerSlide: opts.critiquePassesPerSlide ?? 3,
   });

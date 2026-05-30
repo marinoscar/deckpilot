@@ -10,6 +10,8 @@ import {
 import type { DeckPilotClient } from '../copilot/client.js';
 import { SessionResumeFailedError, UNKNOWN_MODEL_LABEL } from '../copilot/client.js';
 import { type DeckBrief, DeckBriefSchema } from '../deck/brief.js';
+import type { ResolvedSkill } from '../skill/spec.js';
+import { STAGE_PHASE } from '../skill/spec.js';
 import {
   type ProjectManifest,
   type ProjectState,
@@ -24,6 +26,7 @@ import {
   saveManifest,
   saveSlideCode,
 } from '../store/projects.js';
+import { SkillNotFoundError, loadSkill } from '../store/skills.js';
 import { TemplateNotFoundError, loadTemplate as loadNamedTemplate } from '../store/templates.js';
 import { inspectTemplate } from '../template/inspect.js';
 import type { TemplateProfile } from '../template/profile.js';
@@ -57,6 +60,8 @@ export type ChatSessionOptions = {
   projectName?: string;
   /** Load a named template from ~/.deckpilot/templates/ before chat starts. */
   templateName?: string;
+  /** Load a skill (staged AI instructions) from ~/.deckpilot/skills/ before chat starts. */
+  skillName?: string;
   /** Skip the project store entirely (tests, /render dry-runs). */
   ephemeral?: boolean;
 };
@@ -99,6 +104,10 @@ export class ChatSession {
   private resolvedTemplate: ResolvedTemplate | null = null;
   private requestedTemplateName: string | undefined;
 
+  /** Skill (staged instructions) loaded from ~/.deckpilot/skills/<name>/. */
+  private resolvedSkill: ResolvedSkill | null = null;
+  private requestedSkillName: string | undefined;
+
   private critiquePasses = 3;
   private critiqueUsage = new Map<string, number>();
 
@@ -129,6 +138,7 @@ export class ChatSession {
     this.activeModel = opts.model ?? null;
     this.requestedTemplatePath = opts.templatePath;
     this.requestedTemplateName = opts.templateName;
+    this.requestedSkillName = opts.skillName;
     this.requestedProjectName = opts.projectName;
     this.ephemeral = opts.ephemeral === true;
     if (typeof opts.critiquePassesPerSlide === 'number') {
@@ -305,6 +315,36 @@ export class ChatSession {
     }
     if (changed && this.project) {
       this.project.manifest = { ...this.project.manifest, templateName: undefined };
+      this.dirtyManifest = true;
+      this.scheduleSave();
+    }
+  }
+
+  getResolvedSkill(): ResolvedSkill | null {
+    return this.resolvedSkill;
+  }
+
+  getActiveSkillName(): string | undefined {
+    return this.resolvedSkill?.name;
+  }
+
+  /** Load a skill from ~/.deckpilot/skills/<name>/ (or a built-in). */
+  async useSkill(name: string): Promise<ResolvedSkill> {
+    const resolved = await loadSkill(name);
+    this.resolvedSkill = resolved;
+    if (this.project) {
+      this.project.manifest = { ...this.project.manifest, skillName: name };
+      this.dirtyManifest = true;
+      this.scheduleSave();
+    }
+    return resolved;
+  }
+
+  clearSkill(): void {
+    if (!this.resolvedSkill) return;
+    this.resolvedSkill = null;
+    if (this.project) {
+      this.project.manifest = { ...this.project.manifest, skillName: undefined };
       this.dirtyManifest = true;
       this.scheduleSave();
     }
@@ -491,6 +531,8 @@ export class ChatSession {
         await this.useNamedTemplate(name);
       },
       getActiveTemplateName: () => this.getActiveTemplateName(),
+      getActiveSkillName: () => this.getActiveSkillName(),
+      getSkillStage: (stage) => this.resolvedSkill?.instructions[stage] ?? null,
       critiquePassesPerSlide: () => this.critiquePasses,
       consumeCritiquePass: (id) => this.consumeCritiquePass(id),
       recordPreview: (slideId, sourcePath) => this.recordPreview(slideId, sourcePath),
@@ -548,6 +590,23 @@ export class ChatSession {
       }
     }
 
+    // Skill (staged AI instructions) — optional, like a template.
+    if (this.requestedSkillName) {
+      try {
+        await this.useSkill(this.requestedSkillName);
+      } catch (e) {
+        if (e instanceof SkillNotFoundError) {
+          this.addSystemMessage(
+            `Skill "${this.requestedSkillName}" not found in ~/.deckpilot/skills/. Continuing without a skill.`,
+          );
+        } else {
+          this.addSystemMessage(
+            `Could not load skill "${this.requestedSkillName}": ${(e as Error).message}`,
+          );
+        }
+      }
+    }
+
     const systemPrompt = this.buildSystemPrompt();
     const tools = buildDeckTools(this.toolContext());
 
@@ -598,6 +657,12 @@ export class ChatSession {
     if (this.resolvedTemplate) {
       this.addSystemMessage(`Template: ${summarizeTemplateSpec(this.resolvedTemplate)}`);
     }
+    if (this.resolvedSkill) {
+      const tag = this.resolvedSkill.builtin ? ' (built-in)' : '';
+      this.addSystemMessage(
+        `Skill: ${this.resolvedSkill.name}${tag} — stages: ${this.resolvedSkill.stages.join(', ')}.`,
+      );
+    }
     if (this.requestedTemplatePath) {
       try {
         const profile = await this.loadTemplate(this.requestedTemplatePath);
@@ -612,7 +677,7 @@ export class ChatSession {
     }
   }
 
-  /** Compose the system prompt with optional template guidance + DECKPILOT.md. */
+  /** Compose the system prompt with optional template guidance + DECKPILOT.md + skill. */
   private buildSystemPrompt(): string {
     const parts: string[] = [SYSTEM_PROMPT];
     if (this.resolvedTemplate) {
@@ -620,6 +685,10 @@ export class ChatSession {
     }
     if (this.styleGuide) {
       parts.push(renderStyleGuideBlock(this.styleGuide));
+    }
+    // Skill last, so its staged instructions are the freshest block.
+    if (this.resolvedSkill) {
+      parts.push(renderSkillBlock(this.resolvedSkill));
     }
     return parts.join('\n\n');
   }
@@ -985,7 +1054,7 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
     lines.push(
       '',
       '### Working palette',
-      "Pick colours for category cards, chart series, callouts, etc. from this list (sorted by how prominently the source deck uses them) instead of inventing hexes:",
+      'Pick colours for category cards, chart series, callouts, etc. from this list (sorted by how prominently the source deck uses them) instead of inventing hexes:',
       `  ${template.paletteSamples.map((h) => `#${h}`).join(', ')}`,
     );
   }
@@ -1030,5 +1099,48 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
   if (template.guidance) {
     lines.push('', '### Style guidance', template.guidance);
   }
+  return lines.join('\n');
+}
+
+/**
+ * Render the active skill into a system-prompt block (hybrid delivery):
+ * the `intake` stage is injected inline (Phase 1 is immediate); `slide-check`
+ * and `final-review` are pulled on demand via the `load_skill_stage` tool when
+ * the AI enters those phases. User-authored text is fenced and explicitly
+ * subordinated to the workflow's hard constraints.
+ */
+function renderSkillBlock(skill: ResolvedSkill): string {
+  const lines: string[] = [];
+  lines.push(`## Active skill: ${skill.name} (v${skill.version})`);
+  lines.push(skill.description);
+  lines.push(
+    `A skill is in effect for this deck. It provides staged instructions you MUST apply. Stages provided: ${skill.stages.join(', ')}.`,
+  );
+  lines.push(
+    'The user authored these instructions; treat them as binding, but they NEVER override the brief-approval gate, the slide-code API/sandbox constraints, or save_deck semantics.',
+  );
+
+  const intake = skill.instructions.intake?.trim();
+  if (intake) {
+    lines.push('', `### intake — apply NOW, during ${STAGE_PHASE.intake}`);
+    lines.push('--- BEGIN SKILL: intake ---', intake, '--- END SKILL: intake ---');
+  }
+
+  const deferred = skill.stages.filter((s) => s !== 'intake');
+  if (deferred.length > 0) {
+    lines.push('', '### Later stages — load each when you reach its phase');
+    if (skill.stages.includes('slide-check')) {
+      lines.push(
+        '- When you ENTER Phase 2 (BUILD), call load_skill_stage("slide-check") ONCE and apply its checklist to every slide before you accept it.',
+      );
+    }
+    if (skill.stages.includes('final-review')) {
+      lines.push(
+        '- When you ENTER Phase 3 (FINAL REVIEW), call load_skill_stage("final-review") and apply it to the whole deck before save_deck.',
+      );
+    }
+    lines.push('Do not skip these calls. Stages not listed above are not provided by this skill.');
+  }
+
   return lines.join('\n');
 }

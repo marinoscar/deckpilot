@@ -83,7 +83,12 @@ and `resume` when no CLI flag is passed.
 deckpilot config set critique-passes 3
 deckpilot config set model gpt-5
 deckpilot config set defaults.template acme-corp
+deckpilot config set skill story-arc
 ```
+
+Settable keys: `defaults.critiquePassesPerSlide` (alias `critique-passes`),
+`defaults.model` (`model`), `defaults.template` (`template`), `defaults.skill`
+(`skill`).
 
 ---
 
@@ -241,13 +246,42 @@ produces PowerPoint, with autosaved project state under
 | `--token <t>` | GitHub token (overrides env). |
 | `--template <t>` | Named template (from `~/.deckpilot/templates/`) OR path to a `.pptx` to inherit theme/fonts one-shot. Falls back to `defaults.template`. |
 | `--no-picker` | Skip the startup template picker even when templates are saved. |
+| `--skill <s>` | Skill to apply (staged AI instructions, from `~/.deckpilot/skills/` or a built-in like `story-arc`). Falls back to `defaults.skill`. |
+| `--no-skill-picker` | Skip the startup skill picker even when skills exist. |
 | `--critique-passes <n>` | How many `render_slide_preview` passes the model is allowed per slide (0 disables visual critique). Falls back to `defaults.critiquePassesPerSlide`, then 3. Max 5. |
 
 ```bash
 deckpilot start
 deckpilot start my-pitch
 deckpilot start my-pitch --template acme-corp
+deckpilot start my-pitch --skill story-arc
 deckpilot start --model gpt-5 --critique-passes 5
+```
+
+---
+
+### `deckpilot skill list | show | create | edit | delete`
+
+Manage **skills** — staged AI instructions applied during deck creation
+(`intake` before the brief, `slide-check` per slide, `final-review` before
+save). Skills live at `~/.deckpilot/skills/<name>/SKILL.md`; built-ins (e.g.
+`story-arc`) ship with the app and are read-only. See
+[`SKILLS.md`](./SKILLS.md) for the full format and authoring guide.
+
+| Command | Description |
+| --- | --- |
+| `skill list` | List built-in + user skills. |
+| `skill show <name>` | Print the description and every stage section. |
+| `skill create <name> [--overwrite]` | Write an annotated `SKILL.md` scaffold to edit. |
+| `skill edit <name>` | Open `SKILL.md` in `$EDITOR`, re-validated on save. Built-ins are read-only. |
+| `skill delete <name> [<name> ...] --yes` | Delete one or more user skills (bulk supported). Built-ins can't be deleted. |
+
+```bash
+deckpilot skill list
+deckpilot skill show story-arc
+deckpilot skill create exec-review
+deckpilot skill edit exec-review
+deckpilot skill delete exec-review --yes
 ```
 
 ---

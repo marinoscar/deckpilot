@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ChatSession } from '../chat/session.js';
 import { createClient } from '../copilot/client.js';
 import type { ProjectListEntry } from '../store/projects.js';
+import type { SkillListEntry } from '../store/skills.js';
 import type { TemplateListEntry } from '../store/templates.js';
 import { type TemplateSpec, blankTemplate } from '../template/spec.js';
 import { App as ChatApp } from './App.js';
@@ -13,16 +14,18 @@ import { MainMenu } from './screens/MainMenu.js';
 import { NewDeck } from './screens/NewDeck.js';
 import { ProjectsBrowser } from './screens/ProjectsBrowser.js';
 import { Settings } from './screens/Settings.js';
+import { SkillsBrowser } from './screens/SkillsBrowser.js';
 import { TemplateEditor } from './screens/TemplateEditor.js';
 import { TemplatesBrowser } from './screens/TemplatesBrowser.js';
 
-type StartOpts = { projectName?: string; templateName?: string };
+type StartOpts = { projectName?: string; templateName?: string; skillName?: string };
 
 type View =
   | { kind: 'main' }
   | { kind: 'projects'; mode: 'resume' | 'manage' }
   | { kind: 'templates' }
   | { kind: 'template-editor'; mode: 'create' | 'edit'; initial: TemplateSpec }
+  | { kind: 'skills' }
   | { kind: 'new-deck' }
   | { kind: 'settings' }
   | { kind: 'help' }
@@ -66,6 +69,7 @@ export const RootApp: React.FC<Props> = ({
       critiquePassesPerSlide,
       projectName: opts.projectName,
       templateName: opts.templateName,
+      skillName: opts.skillName,
     });
     try {
       await session.start();
@@ -135,6 +139,9 @@ export const RootApp: React.FC<Props> = ({
             case 'templates':
               setView({ kind: 'templates' });
               return;
+            case 'skills':
+              setView({ kind: 'skills' });
+              return;
             case 'settings':
               setView({ kind: 'settings' });
               return;
@@ -155,7 +162,11 @@ export const RootApp: React.FC<Props> = ({
       <ProjectsBrowser
         mode={view.mode}
         onOpen={(entry: ProjectListEntry) =>
-          void startChat({ projectName: entry.name, templateName: entry.manifest.templateName })
+          void startChat({
+            projectName: entry.name,
+            templateName: entry.manifest.templateName,
+            skillName: entry.manifest.skillName,
+          })
         }
         onBack={back}
       />
@@ -182,6 +193,15 @@ export const RootApp: React.FC<Props> = ({
         initial={view.initial}
         onSaved={() => setView({ kind: 'templates' })}
         onCancel={() => setView({ kind: 'templates' })}
+      />
+    );
+  }
+
+  if (view.kind === 'skills') {
+    return (
+      <SkillsBrowser
+        onUseAndStart={(entry: SkillListEntry) => void startChat({ skillName: entry.name })}
+        onBack={back}
       />
     );
   }

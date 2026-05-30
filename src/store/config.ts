@@ -36,6 +36,13 @@ const DefaultsSchema = z
       .max(64)
       .regex(/^[a-z0-9-]+$/, 'must be lower-kebab')
       .optional(),
+    /** Default skill slug (overridden by --skill). */
+    skill: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9-]+$/, 'must be lower-kebab')
+      .optional(),
   })
   .strict();
 
@@ -55,6 +62,7 @@ const ALIASES: Record<string, string> = {
   critiquepasses: 'defaults.critiquePassesPerSlide',
   model: 'defaults.model',
   template: 'defaults.template',
+  skill: 'defaults.skill',
 };
 
 /** Canonicalize a config key from user input. */
@@ -71,6 +79,7 @@ export const SETTABLE_KEYS = [
   'defaults.critiquePassesPerSlide',
   'defaults.model',
   'defaults.template',
+  'defaults.skill',
 ] as const;
 
 export class InvalidConfigKeyError extends Error {
