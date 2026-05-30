@@ -7,9 +7,14 @@
  *     config.json
  *     projects/<slug>/{project.json, brief.json, slides/, transcript.jsonl, ...}
  *     templates/<name>/{template.json, assets/}
+ *     skills/<name>/{SKILL.md, assets/}
+ *
+ * Built-in (read-only) skills ship inside the package at `<pkg>/skills/<name>/`,
+ * resolved by `builtinSkillsRoot()` relative to this compiled module.
  */
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const RELATIVE_ROOT = '.deckpilot';
 
@@ -28,6 +33,22 @@ export function templatesRoot(): string {
   return join(homeRoot(), 'templates');
 }
 
+/** User-authored skills under the DeckPilot home root. */
+export function skillsRoot(): string {
+  return join(homeRoot(), 'skills');
+}
+
+/**
+ * Read-only skills bundled with the package. The compiled module lives at
+ * `<pkg>/dist/store/paths.js`; the shipped skills sit at `<pkg>/skills/`, two
+ * directories up. In dev (tsx from `src/store/`) the same `../../skills`
+ * resolves to the repo-root `skills/` dir, which is where the source lives too.
+ */
+export function builtinSkillsRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', '..', 'skills');
+}
+
 export function configFile(): string {
   return join(homeRoot(), 'config.json');
 }
@@ -38,6 +59,14 @@ export function projectDir(slug: string): string {
 
 export function templateDir(name: string): string {
   return join(templatesRoot(), name);
+}
+
+export function skillDir(name: string): string {
+  return join(skillsRoot(), name);
+}
+
+export function builtinSkillDir(name: string): string {
+  return join(builtinSkillsRoot(), name);
 }
 
 /**

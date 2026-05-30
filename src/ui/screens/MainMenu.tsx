@@ -10,6 +10,7 @@ export type MainChoice =
   | 'resume'
   | 'projects'
   | 'templates'
+  | 'skills'
   | 'settings'
   | 'help'
   | 'quit';
@@ -67,6 +68,12 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
       label: 'Manage templates',
       detail: 'Brands, palettes, fonts, voice / copy rules',
       hotkey: 't',
+    },
+    {
+      value: 'skills',
+      label: 'Manage skills',
+      detail: 'Staged AI instructions: intake, per-slide checks, final review',
+      hotkey: 'k',
     },
     {
       value: 'settings',

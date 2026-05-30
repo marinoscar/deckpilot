@@ -15,6 +15,7 @@ import {
 } from '../render/preview.js';
 import { SlideCodeError, renderDeck } from '../render/renderer.js';
 import { runSlideCode } from '../render/sandbox.js';
+import { type SkillStage, SkillStageSchema } from '../skill/spec.js';
 import {
   TemplateNotFoundError as NamedTemplateNotFoundError,
   listTemplates as listNamedTemplates,
@@ -48,6 +49,10 @@ export type DeckToolContext = {
   useNamedTemplate: (name: string) => Promise<void>;
   /** Active named template, if any. */
   getActiveTemplateName: () => string | undefined;
+  /** Active skill name, if any. */
+  getActiveSkillName: () => string | undefined;
+  /** Active skill's instructions for a given stage, or null if absent. */
+  getSkillStage: (stage: SkillStage) => string | null;
   /** Hard cap on critique/preview calls per slide. 0 disables visual critique. */
   critiquePassesPerSlide: () => number;
   consumeCritiquePass: (slideId: string) => { remaining: number; allowed: boolean };
@@ -603,6 +608,40 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         } catch (e) {
           return { ok: false, error: `Import failed: ${(e as Error).message}` };
         }
+      },
+    }) as Tool,
+
+    defineTool('load_skill_stage', {
+      description:
+        'Fetch the active skill\'s instructions for a workflow stage. Call load_skill_stage("slide-check") ONCE when you begin Phase 2 (BUILD) and apply the returned checklist to every slide before accepting it; call load_skill_stage("final-review") when you begin Phase 3 (FINAL REVIEW) and apply it before save_deck. The intake stage (Phase 1) is already in your system prompt — you do not need to load it. Returns an error if no skill is active or the skill does not provide that stage.',
+      parameters: z.object({
+        stage: SkillStageSchema.describe(
+          'Which stage to load: "slide-check" (per-slide, Phase 2) or "final-review" (whole deck, Phase 3). "intake" is already injected.',
+        ),
+      }),
+      skipPermission: true,
+      handler: async (args): Promise<ToolResult<{ stage: SkillStage; instructions: string }>> => {
+        const skillName = ctx.getActiveSkillName();
+        if (!skillName) {
+          return {
+            ok: false,
+            error: 'No skill is active for this deck, so there are no staged instructions to load.',
+            hint: 'Proceed without skill instructions.',
+          };
+        }
+        const instructions = ctx.getSkillStage(args.stage);
+        if (!instructions) {
+          return {
+            ok: false,
+            error: `The active skill "${skillName}" does not provide a "${args.stage}" stage.`,
+            hint: 'Continue without instructions for this stage.',
+          };
+        }
+        return {
+          ok: true,
+          message: `Skill "${skillName}" — ${args.stage} instructions (apply these now):\n\n${instructions}`,
+          data: { stage: args.stage, instructions },
+        };
       },
     }) as Tool,
   ];

@@ -11,6 +11,7 @@
     "/bin",
     "/dist",
     "/templates",
+    "/skills",
     "/oclif.manifest.json"
   ],
   "engines": {
@@ -71,6 +72,9 @@
       },
       "template": {
         "description": "Manage saved templates: list, show, create, edit, export, import, delete (single or bulk). Templates live at ~/.deckpilot/templates/<name>/."
+      },
+      "skill": {
+        "description": "Manage skills: staged AI instructions (intake, per-slide checks, final review) applied during deck creation. List, show, create, edit, delete. Skills live at ~/.deckpilot/skills/<name>/SKILL.md."
       }
     },
     "hooks": {

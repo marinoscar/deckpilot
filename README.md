@@ -246,6 +246,36 @@ deckpilot template delete acme --yes
 
 ---
 
+## Skills: staged AI instructions
+
+A **skill** steers *how* the AI builds the deck, at three points in the workflow:
+`intake` (interview you before designing), `slide-check` (per-slide quality
+bars), and `final-review` (a whole-deck pass before saving). Where a template is
+visual style, a skill is process. Skills live at `~/.deckpilot/skills/<name>/SKILL.md`
+and follow an agent-skills-style format (frontmatter + one section per stage).
+
+DeckPilot ships a built-in **`story-arc`** skill that interviews you about
+audience, the change you want, and the core tension — then structures the deck
+as a narrative (setup → tension → turn → resolution → call to action) and
+reviews it for that shape at the end.
+
+```bash
+deckpilot skill list                  # built-ins + your own
+deckpilot skill show story-arc
+deckpilot skill create exec-review    # writes an annotated SKILL.md to edit
+deckpilot skill edit exec-review      # $EDITOR, re-validated on save
+deckpilot skill delete exec-review --yes
+
+deckpilot start --skill story-arc     # or pick one in the New-deck wizard / startup picker
+deckpilot config set skill story-arc  # make it the default
+```
+
+Pick a skill as the third step of the **New deck** wizard, or manage them from
+the **Manage skills** main-menu entry. Full format reference and authoring guide:
+[`docs/SKILLS.md`](docs/SKILLS.md).
+
+---
+
 ## Inside the chat
 
 Anything you type that doesn't start with `/` is sent to the model. Slash commands are handled locally.
@@ -337,6 +367,13 @@ deckpilot template edit <name> [--set k=v ...] [--editor]
 deckpilot template export <name> [<zip>]
 deckpilot template import <zip> [--name <new>]
 deckpilot template delete <name> [<name> ...] --yes
+
+# Skills — staged AI instructions (intake / slide-check / final-review)
+deckpilot skill list
+deckpilot skill show <name>
+deckpilot skill create <name> [--overwrite]
+deckpilot skill edit <name>
+deckpilot skill delete <name> [<name> ...] --yes
 
 # Persistent defaults at ~/.deckpilot/config.json
 deckpilot config list

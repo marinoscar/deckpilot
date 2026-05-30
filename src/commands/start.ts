@@ -6,8 +6,10 @@ import { ChatSession } from '../chat/session.js';
 import { BaseCommand } from '../cli/base-command.js';
 import { createClient } from '../copilot/client.js';
 import { loadConfig } from '../store/config.js';
+import { listSkills, skillExists } from '../store/skills.js';
 import { listTemplates, templateExists } from '../store/templates.js';
 import { App } from '../ui/App.js';
+import { SkillPicker } from '../ui/SkillPicker.js';
 import { TemplatePicker } from '../ui/TemplatePicker.js';
 
 /**
@@ -54,6 +56,16 @@ export default class Start extends BaseCommand {
         'Skip the startup template picker even when templates are saved and no --template flag is set.',
       default: false,
     }),
+    skill: Flags.string({
+      description:
+        'Skill to apply (staged AI instructions, from ~/.deckpilot/skills/ or a built-in like story-arc).',
+      required: false,
+    }),
+    'no-skill-picker': Flags.boolean({
+      description:
+        'Skip the startup skill picker even when skills exist and no --skill flag is set.',
+      default: false,
+    }),
     'critique-passes': Flags.integer({
       description:
         'How many render_slide_preview passes the model is allowed per slide (0 disables the visual critique loop). Default 3 unless overridden by `deckpilot config set critique-passes <n>`; max 5.',
@@ -91,6 +103,22 @@ export default class Start extends BaseCommand {
       }
     }
 
+    let skillName: string | undefined;
+    if (flags.skill) {
+      skillName = flags.skill;
+    } else if (cfg.defaults.skill) {
+      if (await skillExists(cfg.defaults.skill)) {
+        skillName = cfg.defaults.skill;
+      }
+    }
+
+    if (!skillName && !flags['no-skill-picker']) {
+      const skills = await listSkills();
+      if (skills.length > 0) {
+        skillName = await SkillPicker.pickInteractive(skills);
+      }
+    }
+
     const critiquePasses = flags['critique-passes'] ?? cfg.defaults.critiquePassesPerSlide ?? 3;
     const model = flags.model ?? cfg.defaults.model;
 
@@ -99,6 +127,7 @@ export default class Start extends BaseCommand {
       model,
       templatePath,
       templateName,
+      skillName,
       projectName: args.project,
       critiquePassesPerSlide: critiquePasses,
     });
