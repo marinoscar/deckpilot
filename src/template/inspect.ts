@@ -3,9 +3,10 @@ import { resolve } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { extractDonorGeometry } from './donor-geometry.js';
-import { extractMasterFromPptx } from './master-extract.js';
-import { aggregatePalette, readThemeSchemeMap } from './palette-aggregate.js';
+import { extractCoverBackground, extractMasterFromPptx } from './master-extract.js';
+import { type ThemeSchemeMap, aggregatePalette, readThemeSchemeMap } from './palette-aggregate.js';
 import type { TemplateProfile } from './profile.js';
+import type { ThemePalette } from './spec.js';
 
 /**
  * Fallback colours/fonts when a template has no explicit theme part. Kept
@@ -42,6 +43,7 @@ const xmlParser = new XMLParser({
 export type InspectOpts = {
   templateRootDir?: string;
   extractMaster?: boolean;
+  extractCoverBackground?: boolean;
   extractPalette?: boolean;
   extractDonorGeometry?: boolean;
   maxDonorSlides?: number;
@@ -88,10 +90,26 @@ export async function inspectTemplate(
   };
 
   // v0.16 enrichments — each is independently opt-out via opts.
+  let masterBackgroundMedia: string | undefined;
   if (opts.extractMaster !== false) {
-    const { master, copiedAssets } = await extractMasterFromPptx(zip, opts.templateRootDir);
+    const { master, copiedAssets, backgroundMedia } = await extractMasterFromPptx(
+      zip,
+      opts.templateRootDir,
+    );
     if (master) profile.master = master;
     if (copiedAssets.length > 0) profile.copiedAssets = copiedAssets;
+    masterBackgroundMedia = backgroundMedia;
+  }
+
+  // Cover/title background — a full-bleed hero for covers/dividers, distinct
+  // from the all-slides master background. Lands in assets.background; the
+  // code-gen LLM paints it where appropriate.
+  if (opts.extractCoverBackground !== false) {
+    const cover = await extractCoverBackground(zip, opts.templateRootDir, masterBackgroundMedia);
+    if (cover.src) profile.assets = { ...profile.assets, background: cover.src };
+    if (cover.copiedAssets.length > 0) {
+      profile.copiedAssets = [...(profile.copiedAssets ?? []), ...cover.copiedAssets];
+    }
   }
 
   // Palette + donor geometry both need the theme scheme map. Build it once.
@@ -101,6 +119,8 @@ export async function inspectTemplate(
   if (opts.extractPalette !== false) {
     const samples = await aggregatePalette(zip, scheme);
     if (samples.length > 0) profile.paletteSamples = samples;
+    const palette = themePaletteFromScheme(scheme);
+    if (palette) profile.themePalette = palette;
   }
 
   if (opts.extractDonorGeometry !== false) {
@@ -112,6 +132,34 @@ export async function inspectTemplate(
   }
 
   return profile;
+}
+
+/**
+ * Map the OOXML scheme map onto the spec's named ThemePalette. Renames the
+ * hyperlink tokens (`hlink`/`folHlink` → `hyperlink`/`followedHyperlink`);
+ * everything else carries its OOXML name. Returns undefined when the scheme
+ * yielded no colours.
+ */
+function themePaletteFromScheme(scheme: ThemeSchemeMap): ThemePalette | undefined {
+  const palette: ThemePalette = {};
+  const direct = [
+    'dk1',
+    'lt1',
+    'dk2',
+    'lt2',
+    'accent1',
+    'accent2',
+    'accent3',
+    'accent4',
+    'accent5',
+    'accent6',
+  ] as const;
+  for (const k of direct) {
+    if (scheme[k]) palette[k] = scheme[k];
+  }
+  if (scheme.hlink) palette.hyperlink = scheme.hlink;
+  if (scheme.folHlink) palette.followedHyperlink = scheme.folHlink;
+  return Object.keys(palette).length > 0 ? palette : undefined;
 }
 
 async function readSlideSize(

@@ -41,18 +41,21 @@ const DEFAULT_TIMEOUT_MS = 5_000;
  * In both cases we wrap-and-invoke so the LLM can write whichever style it
  * finds clearest.
  */
+/** Absolute brand-asset paths exposed to slide code as `theme.assets`. */
+export type ThemeAssets = { logo?: string; wordmark?: string; background?: string };
+
 export function runSlideCode(
   code: string,
   pptxSlide: PSlide,
   theme: Theme,
   slideId: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; assets?: ThemeAssets } = {},
 ): void {
   const proxy = buildSlideProxy(pptxSlide, theme);
   const helpers = buildHelpers(theme);
   const sandbox = {
     slide: proxy,
-    theme: Object.freeze({ ...theme }),
+    theme: Object.freeze({ ...theme, ...(opts.assets ? { assets: opts.assets } : {}) }),
     helpers,
     // Pass-through console so an LLM that drops `console.log` for debugging
     // doesn't crash. We deliberately drop the output on the floor — diagnostic

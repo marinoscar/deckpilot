@@ -1,4 +1,4 @@
-import type { DonorGeometry, Master, ResolvedTemplate } from './spec.js';
+import type { DonorGeometry, Master, ResolvedTemplate, ThemePalette } from './spec.js';
 
 /**
  * TemplateProfile — what DeckPilot extracts from a user-supplied `.pptx` to
@@ -33,8 +33,17 @@ export type TemplateProfile = {
   layoutNames: string[];
   /** Brand chrome (background + logo/footer objects) — applied via pptxgenjs defineSlideMaster. */
   master?: Master;
+  /**
+   * Resolved brand asset paths. Absolute when produced by `profileFromResolved`
+   * (a loaded named template); relative `assets/…` paths when produced directly
+   * by `inspectTemplate`. The renderer attaches these to the slide-code `theme`
+   * (`theme.assets.background` etc.) so the LLM can place covers/dividers.
+   */
+  assets?: { logo?: string; wordmark?: string; background?: string };
   /** Distinct colours used prominently across slides, sorted by frequency. */
   paletteSamples?: string[];
+  /** The source deck's canonical theme colour scheme (named brand swatches). */
+  themePalette?: ThemePalette;
   /** Per-source-slide layout descriptors (LLM-facing layout vocabulary). */
   donorGeometry?: DonorGeometry[];
   /** Asset-path entries written into `<templateRootDir>/assets/` during extraction. */
@@ -77,7 +86,9 @@ export function profileFromResolved(resolved: ResolvedTemplate): TemplateProfile
     },
     layoutNames: [],
     ...(resolved.master ? { master: resolved.master } : {}),
+    ...(resolved.assets ? { assets: resolved.assets } : {}),
     ...(resolved.paletteSamples ? { paletteSamples: resolved.paletteSamples } : {}),
+    ...(resolved.themePalette ? { themePalette: resolved.themePalette } : {}),
     ...(resolved.donorGeometry ? { donorGeometry: resolved.donorGeometry } : {}),
     rootDir: resolved.rootDir,
   };

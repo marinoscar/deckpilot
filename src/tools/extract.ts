@@ -191,6 +191,18 @@ function summarizePreExtracted(spec: TemplateSpec): string {
     if (spec.master.objects?.length) parts.push(`${spec.master.objects.length} object(s)`);
     lines.push(`- Master extracted: ${parts.join(', ') || '(empty)'}.`);
   }
+  if (spec.assets?.background) {
+    lines.push(
+      `- Cover background extracted to ${spec.assets.background} (the title/cover full-bleed image; the renderer surfaces it as theme.assets.background for covers/dividers).`,
+    );
+  }
+  if (spec.themePalette) {
+    const named = Object.entries(spec.themePalette)
+      .filter(([, v]) => Boolean(v))
+      .map(([k, v]) => `${k} #${v}`)
+      .join(', ');
+    if (named) lines.push(`- Theme colour scheme: ${named}.`);
+  }
   if (spec.paletteSamples?.length) {
     lines.push(
       `- Palette samples (${spec.paletteSamples.length}): ${spec.paletteSamples.map((h) => `#${h}`).join(', ')}.`,
@@ -234,6 +246,17 @@ function mergeWithPreExtracted(
 
   if (pre.paletteSamples) merged.paletteSamples = pre.paletteSamples;
   else if (llm.paletteSamples) merged.paletteSamples = llm.paletteSamples;
+
+  // themePalette — the canonical clrScheme is deterministic; prefer OOXML.
+  if (pre.themePalette) merged.themePalette = pre.themePalette;
+  else if (llm.themePalette) merged.themePalette = llm.themePalette;
+
+  // assets — the cover background is copied to disk during pre-extraction, so
+  // the OOXML value is authoritative. Keep any LLM-authored logo/wordmark refs.
+  if (pre.assets || llm.assets) {
+    const mergedAssets = { ...llm.assets, ...pre.assets };
+    if (Object.keys(mergedAssets).length > 0) merged.assets = mergedAssets;
+  }
 
   // donorGeometry: use OOXML positions, accept LLM summaries by index.
   if (pre.donorGeometry) {

@@ -32,6 +32,12 @@ export type MasterExtractResult = {
   master?: Master;
   /** Asset paths written into `<templateRootDir>/assets/` (relative paths, forward slashes). */
   copiedAssets: string[];
+  /**
+   * Zip source path of the master's all-slides background image, when it has
+   * one (e.g. `ppt/media/image2.png`). The cover-background extractor uses this
+   * to avoid re-emitting the same image as a distinct cover.
+   */
+  backgroundMedia?: string;
 };
 
 /**
@@ -65,7 +71,7 @@ export async function extractMasterFromPptx(
     if (!cSld) continue;
 
     // 1. Background.
-    const background = await extractBackground(
+    const { background, mediaPath: backgroundMedia } = await extractBackground(
       cSld,
       candidate,
       zip,
@@ -77,14 +83,7 @@ export async function extractMasterFromPptx(
     const spTree = cSld['p:spTree'] as Record<string, unknown> | undefined;
     const objects: MasterObject[] = [];
     if (spTree) {
-      await extractShapesInto(
-        objects,
-        spTree,
-        candidate,
-        zip,
-        templateRootDir,
-        copiedAssets,
-      );
+      await extractShapesInto(objects, spTree, candidate, zip, templateRootDir, copiedAssets);
     }
 
     // Skip empty candidates — they don't contribute brand chrome.
@@ -95,10 +94,124 @@ export async function extractMasterFromPptx(
     if (objects.length > 0) master.objects = objects;
 
     // Re-validate via the schema's refinement (background OR objects required).
-    return { master, copiedAssets };
+    return { master, copiedAssets, backgroundMedia };
   }
 
   return { master: undefined, copiedAssets };
+}
+
+export type CoverBackgroundResult = {
+  /** Relative `assets/…` path of the copied cover background, or undefined. */
+  src?: string;
+  /** Asset paths written into `<templateRootDir>/assets/` (forward slashes). */
+  copiedAssets: string[];
+};
+
+/**
+ * Extract the *cover* background image — the full-bleed hero a branded deck
+ * puts behind its title slide (and section dividers). This is distinct from
+ * the all-slides master background (`extractMasterFromPptx`): the cover image
+ * is meant for covers/dividers only, so it lands in `assets.background` and the
+ * code-gen LLM paints it where appropriate (rather than the renderer painting
+ * it on every slide via the slide master).
+ *
+ * Resolution order, first image wins:
+ *   1. `ppt/slides/slide1.xml`'s own `<p:bg>` blip fill.
+ *   2. The layout `slide1.xml` references → that layout's `<p:bg>` blip.
+ *   3. The first `title` / `sectionHeader` layout carrying a `<p:bg>` blip.
+ *
+ * Returns undefined when no image background is found, or when the resolved
+ * media equals `excludeMedia` (the all-slides master background already copied
+ * as `assets/master-background.*`) — that's not a distinct cover.
+ *
+ * When `templateRootDir` is undefined there's nowhere to write the bytes, so
+ * the function returns undefined (consistent with the master extractor).
+ */
+export async function extractCoverBackground(
+  zip: JSZip,
+  templateRootDir: string | undefined,
+  excludeMedia?: string,
+): Promise<CoverBackgroundResult> {
+  const copiedAssets: string[] = [];
+  if (!templateRootDir) return { copiedAssets };
+
+  const mediaPath = await findCoverBackgroundMedia(zip);
+  if (!mediaPath) return { copiedAssets };
+  // Dedup against the all-slides master background — same file isn't a cover.
+  if (excludeMedia && mediaPath === excludeMedia) return { copiedAssets };
+
+  const ext = mediaPath.split('.').pop() ?? 'png';
+  const out = `assets/cover-background.${ext}`;
+  await copyMedia(zip, mediaPath, join(templateRootDir, ...out.split('/')));
+  copiedAssets.push(out);
+  return { src: out, copiedAssets };
+}
+
+/**
+ * Resolve the title slide's effective image background to a zip media path,
+ * walking slide → its layout → the title/sectionHeader layouts. Returns the
+ * `ppt/media/*` path, or undefined when no blip-fill background exists.
+ */
+async function findCoverBackgroundMedia(zip: JSZip): Promise<string | undefined> {
+  // 1. slide1.xml's own background.
+  const slidePath = 'ppt/slides/slide1.xml';
+  if (zip.file(slidePath)) {
+    const rels = await readRels(zip, slidePath);
+    const fromSlide = await bgBlipMedia(zip, slidePath, 'p:sld', rels);
+    if (fromSlide) return fromSlide;
+
+    // 2. The layout slide1 references.
+    const layoutTarget = [...rels.values()].find((t) =>
+      /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(t),
+    );
+    if (layoutTarget) {
+      const layoutRels = await readRels(zip, layoutTarget);
+      const fromLayout = await bgBlipMedia(zip, layoutTarget, 'p:sldLayout', layoutRels);
+      if (fromLayout) return fromLayout;
+    }
+  }
+
+  // 3. First title / sectionHeader layout with a blip background.
+  const layoutPaths = Object.keys(zip.files)
+    .filter((p) => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(p))
+    .sort();
+  for (const path of layoutPaths) {
+    const xml = await zip.file(path)?.async('string');
+    if (!xml) continue;
+    const parsed = xmlParser.parse(xml) as Record<string, unknown>;
+    const layout = parsed['p:sldLayout'] as Record<string, string> | undefined;
+    const type = layout?.['@_type'];
+    if (type !== 'title' && type !== 'sectionHeader') continue;
+    const rels = await readRels(zip, path);
+    const media = await bgBlipMedia(zip, path, 'p:sldLayout', rels);
+    if (media) return media;
+  }
+
+  return undefined;
+}
+
+/**
+ * Read `<p:bg><p:bgPr><a:blipFill><a:blip r:embed>` from an already-located
+ * part and resolve the embed to a zip media path. `rootTag` is the document
+ * root element (`p:sld` / `p:sldLayout` / `p:sldMaster`).
+ */
+async function bgBlipMedia(
+  zip: JSZip,
+  xmlPath: string,
+  rootTag: string,
+  rels: Map<string, string>,
+): Promise<string | undefined> {
+  const xml = await zip.file(xmlPath)?.async('string');
+  if (!xml) return undefined;
+  const parsed = xmlParser.parse(xml) as Record<string, unknown>;
+  const root = parsed[rootTag] as Record<string, unknown> | undefined;
+  const cSld = root?.['p:cSld'] as Record<string, unknown> | undefined;
+  const bg = cSld?.['p:bg'] as Record<string, unknown> | undefined;
+  const bgPr = bg?.['p:bgPr'] as Record<string, unknown> | undefined;
+  const blip = bgPr?.['a:blipFill'] as Record<string, unknown> | undefined;
+  const rId = blip && getRId(blip['a:blip']);
+  if (!rId) return undefined;
+  return rels.get(rId);
 }
 
 /**
@@ -187,16 +300,16 @@ async function extractBackground(
   zip: JSZip,
   templateRootDir: string | undefined,
   copiedAssets: string[],
-): Promise<Master['background'] | undefined> {
+): Promise<{ background?: Master['background']; mediaPath?: string }> {
   const bg = cSld['p:bg'] as Record<string, unknown> | undefined;
-  if (!bg) return undefined;
+  if (!bg) return {};
   const bgPr = bg['p:bgPr'] as Record<string, unknown> | undefined;
-  if (!bgPr) return undefined;
+  if (!bgPr) return {};
 
   // Solid fill.
   const solid = bgPr['a:solidFill'] as Record<string, unknown> | undefined;
   const solidHex = solid ? readSolidFillHex(solid) : undefined;
-  if (solidHex) return { type: 'solid', color: solidHex };
+  if (solidHex) return { background: { type: 'solid', color: solidHex } };
 
   // Image (blip) fill.
   if (templateRootDir) {
@@ -209,12 +322,12 @@ async function extractBackground(
         const out = `assets/master-background.${ext}`;
         await copyMedia(zip, mediaPath, join(templateRootDir, ...out.split('/')));
         if (!copiedAssets.includes(out)) copiedAssets.push(out);
-        return { type: 'image', src: out };
+        return { background: { type: 'image', src: out }, mediaPath };
       }
     }
   }
 
-  return undefined;
+  return {};
 }
 
 async function extractShapesInto(
@@ -290,7 +403,9 @@ function isPlaceholder(sp: Record<string, unknown>): boolean {
   return Boolean(nvPr?.['p:ph']);
 }
 
-function readGeometry(sp: Record<string, unknown>): { x: number; y: number; w: number; h: number } | undefined {
+function readGeometry(
+  sp: Record<string, unknown>,
+): { x: number; y: number; w: number; h: number } | undefined {
   const spPr = sp['p:spPr'] as Record<string, unknown> | undefined;
   const xfrm = spPr?.['a:xfrm'] as Record<string, unknown> | undefined;
   const off = xfrm?.['a:off'] as Record<string, string> | undefined;

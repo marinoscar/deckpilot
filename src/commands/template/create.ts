@@ -79,6 +79,11 @@ export default class TemplateCreate extends BaseCommand {
       description: 'Skip per-slide palette aggregation. Theme palette still comes from theme1.xml.',
       default: false,
     }),
+    'no-cover-background': Flags.boolean({
+      description:
+        "Skip extracting the title slide's full-bleed cover background into assets.background. The all-slides master background (if any) is still extracted.",
+      default: false,
+    }),
     'max-donor-slides': Flags.integer({
       description:
         "Cap on slides walked when building the donor-geometry catalog. Default 40 (schema cap). Useful for tightly bounding the chat system-prompt size.",
@@ -128,6 +133,7 @@ export default class TemplateCreate extends BaseCommand {
         description: flags.description,
         templateRootDir: templateDir(slug),
         extractMaster: !flags['no-master'],
+        extractCoverBackground: !flags['no-cover-background'],
         extractPalette: !flags['no-palette-samples'],
         extractDonorGeometry: !flags['no-donor-geometry'],
         maxDonorSlides: flags['max-donor-slides'],
@@ -139,9 +145,14 @@ export default class TemplateCreate extends BaseCommand {
     }
 
     // ---- Source pptx + vision pass (default) ----
-    if (flags['no-master'] || flags['no-donor-geometry'] || flags['no-palette-samples']) {
+    if (
+      flags['no-master'] ||
+      flags['no-donor-geometry'] ||
+      flags['no-palette-samples'] ||
+      flags['no-cover-background']
+    ) {
       this.warn(
-        '--no-master / --no-donor-geometry / --no-palette-samples only affect the shallow OOXML path; the vision-driven extractor always runs full extraction. Pass --shallow to honour them.',
+        '--no-master / --no-donor-geometry / --no-palette-samples / --no-cover-background only affect the shallow OOXML path; the vision-driven extractor always runs full extraction. Pass --shallow to honour them.',
       );
     }
     this.log(`Extracting "${slug}" from ${flags.from} …`);

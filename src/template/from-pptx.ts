@@ -23,6 +23,7 @@ export type TemplateFromPptxOpts = {
   templateRootDir?: string;
   /** Opt-outs for the v0.16 extractors (CLI --no-* flags). */
   extractMaster?: boolean;
+  extractCoverBackground?: boolean;
   extractPalette?: boolean;
   extractDonorGeometry?: boolean;
   maxDonorSlides?: number;
@@ -47,6 +48,7 @@ export async function templateFromPptx(
   const profile = await inspectTemplate(pptxPath, {
     templateRootDir: opts.templateRootDir,
     extractMaster: opts.extractMaster,
+    extractCoverBackground: opts.extractCoverBackground,
     extractPalette: opts.extractPalette,
     extractDonorGeometry: opts.extractDonorGeometry,
     maxDonorSlides: opts.maxDonorSlides,
@@ -74,7 +76,11 @@ export async function templateFromPptx(
       aspect,
     },
     ...(profile.master ? { master: profile.master } : {}),
+    // assets.background is the cover/divider hero — relative `assets/…` path
+    // copied during inspection. logo/wordmark stay for the user to fill in.
+    ...(profile.assets?.background ? { assets: { background: profile.assets.background } } : {}),
     ...(profile.paletteSamples ? { paletteSamples: profile.paletteSamples } : {}),
+    ...(profile.themePalette ? { themePalette: profile.themePalette } : {}),
     ...(profile.donorGeometry ? { donorGeometry: profile.donorGeometry } : {}),
   };
 

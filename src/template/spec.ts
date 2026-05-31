@@ -133,6 +133,30 @@ export const DonorGeometrySchema = z.object({
 });
 export type DonorGeometry = z.infer<typeof DonorGeometrySchema>;
 
+/**
+ * The donor deck's canonical theme colour scheme (OOXML `a:clrScheme`) —
+ * the ~8-10 brand swatches PowerPoint exposes in its colour picker. Captured
+ * verbatim from `theme1.xml` and surfaced to the code-gen LLM as the brand's
+ * named palette, alongside the usage-frequency `paletteSamples`. The renderable
+ * `theme` (accent / accentAlt / ink / muted / paper) maps a 5-colour subset of
+ * this; the rest (accent4-6, hyperlinks) live here as context only.
+ */
+export const ThemePaletteSchema = z.object({
+  dk1: HexColor.optional(),
+  lt1: HexColor.optional(),
+  dk2: HexColor.optional(),
+  lt2: HexColor.optional(),
+  accent1: HexColor.optional(),
+  accent2: HexColor.optional(),
+  accent3: HexColor.optional(),
+  accent4: HexColor.optional(),
+  accent5: HexColor.optional(),
+  accent6: HexColor.optional(),
+  hyperlink: HexColor.optional(),
+  followedHyperlink: HexColor.optional(),
+});
+export type ThemePalette = z.infer<typeof ThemePaletteSchema>;
+
 export const TemplateAssetsSchema = z.object({
   logo: RelativePath.optional().describe(
     'Primary brand mark. Path relative to the template dir, e.g. "assets/logo.png".',
@@ -176,6 +200,9 @@ export const TemplateSpecSchema = z.object({
     .describe(
       'Distinct colours the source deck uses prominently (cards, chart series, etc.). The code-gen LLM picks from this list instead of inventing.',
     ),
+  themePalette: ThemePaletteSchema.optional().describe(
+    "The source deck's canonical theme colour scheme (theme1.xml clrScheme) — the named brand swatches (accent1-6, dark/light, hyperlinks). Surfaced to the code-gen LLM as the brand palette.",
+  ),
   donorGeometry: z
     .array(DonorGeometrySchema)
     .max(40)

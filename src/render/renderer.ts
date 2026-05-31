@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 // pptxgenjs has an awkward type shape — its runtime export is a class but
 // tsc reads the `export as namespace` + `export default` combo as a namespace.
 import pptxgenjsImport from 'pptxgenjs';
@@ -9,7 +9,7 @@ import type { DeckBrief } from '../deck/brief.js';
 import type { Theme } from '../deck/theme.js';
 import type { TemplateProfile } from '../template/profile.js';
 import type { Master } from '../template/spec.js';
-import { SlideCodeError, runSlideCode } from './sandbox.js';
+import { SlideCodeError, type ThemeAssets, runSlideCode } from './sandbox.js';
 
 const MASTER_NAME = 'TemplateMaster';
 
@@ -54,6 +54,11 @@ export async function renderDeck(
     applyMaster(pres, master, masterRootDir);
   }
 
+  // Brand assets (logo / wordmark / cover background) surfaced to slide code as
+  // `theme.assets`, resolved to absolute paths. The LLM places these itself —
+  // e.g. the cover background on covers/dividers — guarded by `if (theme.assets?.…)`.
+  const themeAssets = resolveThemeAssets(opts.template?.assets, masterRootDir);
+
   for (const slideBrief of brief.slides) {
     const s = masterActive ? pres.addSlide({ masterName: MASTER_NAME }) : pres.addSlide();
     // Default paper background — but only when the master isn't already
@@ -65,7 +70,10 @@ export async function renderDeck(
 
     const code = slideCode.get(slideBrief.id);
     if (code) {
-      runSlideCode(code, s, theme, slideBrief.id, { timeoutMs: opts.slideTimeoutMs });
+      runSlideCode(code, s, theme, slideBrief.id, {
+        timeoutMs: opts.slideTimeoutMs,
+        assets: themeAssets,
+      });
     } else {
       // Placeholder: title + "no slide code yet" hint.
       s.addText(slideBrief.title, {
@@ -176,6 +184,28 @@ function resolveSrc(src: string, rootDir: string | undefined): string | undefine
   // src uses POSIX-style forward slashes inside template.json; split + join
   // so Windows produces the correct \-separated absolute path.
   return join(rootDir, ...src.split('/'));
+}
+
+/**
+ * Resolve brand-asset paths to absolute for slide code. Named templates
+ * (via profileFromResolved) already hand absolute paths through; one-shot
+ * profiles loaded straight from a .pptx carry relative `assets/…` paths that
+ * we join against rootDir. Entries we can't resolve (relative, no rootDir) are
+ * dropped so slide code never sees a broken path.
+ */
+function resolveThemeAssets(
+  assets: ThemeAssets | undefined,
+  rootDir: string | undefined,
+): ThemeAssets | undefined {
+  if (!assets) return undefined;
+  const out: ThemeAssets = {};
+  for (const key of ['logo', 'wordmark', 'background'] as const) {
+    const val = assets[key];
+    if (!val) continue;
+    if (isAbsolute(val)) out[key] = val;
+    else if (rootDir) out[key] = join(rootDir, ...val.split('/'));
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Template overrides theme colours/fonts where present. */

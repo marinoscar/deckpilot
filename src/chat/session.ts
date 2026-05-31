@@ -1046,6 +1046,43 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
       `Wordmark available at \`theme.assets.wordmark\` (absolute path: ${template.assets.wordmark}).`,
     );
   }
+  if (template.assets?.background) {
+    lines.push(
+      '',
+      `Cover background available at \`theme.assets.background\` (absolute path: ${template.assets.background}). This is the source deck's full-bleed title/cover image. Paint it on COVER and SECTION-DIVIDER slides only — \`slide.background = { path: theme.assets.background }\` — then lay the title/section text over it. Do NOT use it on ordinary body slides. Guard with \`if (theme.assets?.background)\`.`,
+    );
+  }
+
+  // Canonical brand palette — the source theme's clrScheme (named swatches).
+  if (template.themePalette) {
+    const tp = template.themePalette;
+    const swatches = (
+      [
+        ['accent1', tp.accent1],
+        ['accent2', tp.accent2],
+        ['accent3', tp.accent3],
+        ['accent4', tp.accent4],
+        ['accent5', tp.accent5],
+        ['accent6', tp.accent6],
+        ['dark1', tp.dk1],
+        ['dark2', tp.dk2],
+        ['light1', tp.lt1],
+        ['light2', tp.lt2],
+        ['hyperlink', tp.hyperlink],
+        ['followed', tp.followedHyperlink],
+      ] as const
+    )
+      .filter(([, v]) => Boolean(v))
+      .map(([k, v]) => `${k} #${v}`);
+    if (swatches.length > 0) {
+      lines.push(
+        '',
+        '### Brand colour scheme',
+        "The source deck's canonical theme colours (its PowerPoint colour scheme). Prefer these named brand swatches — especially accent4-6, which the deck theme's accent/accentAlt don't cover:",
+        `  ${swatches.join(', ')}`,
+      );
+    }
+  }
 
   // Working palette — extracted hexes from across the source deck. Even
   // when accent / accentAlt are set on the theme, this list often carries
