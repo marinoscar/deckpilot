@@ -303,7 +303,11 @@ fill in `template.json` by hand (or via `template edit`). With `--from
    `defineSlideMaster`), so brand chrome appears on every slide without the
    code-gen LLM having to redraw it.
 
-`--shallow` skips the vision pass but still runs full OOXML extraction.
+`--shallow` skips the vision pass but still runs full OOXML extraction. Note:
+the `--no-master` / `--no-donor-geometry` / `--no-palette-samples` /
+`--no-cover-background` opt-outs only apply to the shallow path — the
+vision-driven extractor always runs full extraction. Pass `--shallow` for the
+opt-outs to take effect.
 
 | Flag | Description |
 | --- | --- |
@@ -311,7 +315,8 @@ fill in `template.json` by hand (or via `template edit`). With `--from
 | `--shallow` | Skip the vision LLM pass (OOXML only). |
 | `--no-master` | Skip the brand-master extraction (debug / fallback for sources with complex masters). |
 | `--no-donor-geometry` | Skip the per-slide donor catalog (token-budget control on huge decks). |
-| `--no-palette-samples` | Skip per-slide palette aggregation (theme palette still comes from theme1.xml). |
+| `--no-palette-samples` | Skip per-slide palette aggregation (`themePalette` from theme1.xml still comes through). |
+| `--no-cover-background` | Skip extracting the title slide's full-bleed cover background into `assets.background`. The all-slides master background (if any) is still extracted. |
 | `--max-donor-slides <N>` | Cap donor-catalog slide count. Default 40 (schema cap). |
 | `--brand <name>` | Embed a brand name in the spec. |
 | `--description <text>` | Embed a one-line description. |

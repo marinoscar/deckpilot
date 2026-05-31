@@ -264,7 +264,7 @@ The installer will:
 ## What the installer prints (v0.14.5+)
 
 ```
-DeckPilot installer v0.16.0
+DeckPilot installer v0.17.0
 · Preflight
 ✓ Node 22.11.0
 ✓ Disk: 63437 MB free on drive C:
@@ -281,7 +281,7 @@ DeckPilot installer v0.16.0
 · Linking globally (npm link)
 ✓ Linked into C:\Users\you\AppData\Roaming\npm\deckpilot.cmd
 · Smoke test
-✓ deckpilot/0.14.5 win32-x64 node-v22.11.0
+✓ deckpilot/0.17.0 win32-x64 node-v22.11.0
 · Running deckpilot doctor
 ✓ Node ≥ 20 — node v22.11.0
 ✓ GitHub token resolvable — source: ...

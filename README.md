@@ -4,7 +4,7 @@
 
 Have a normal conversation in your terminal — DeckPilot proposes the outline, lets you approve it, then writes the rendering code for every slide itself, looking at the rendered PNGs and revising until each one is good. Output: a real `.pptx` you can hand off.
 
-> **Status:** v0.16 — faithful brand reproduction. `template create --from brand.pptx` extracts the source's slide master (logo, background, footer chrome), aggregates the working palette from every slide, and catalogs each slide's named-shape layout as a "vocabulary" the code-gen LLM scans when authoring. Every slide DeckPilot generates from a template inherits the brand chrome automatically via pptxgenjs's `defineSlideMaster` — you stop seeing the LLM redraw your logo on every slide.
+> **Status:** v0.17 — faithful brand reproduction. `template create --from brand.pptx` extracts the source's slide master (logo, background, footer chrome), the title slide's full-bleed **cover background**, the deck's **full theme palette** (all six accents + dark/light + hyperlinks), aggregates the working palette from every slide, and catalogs each slide's named-shape layout as a "vocabulary" the code-gen LLM scans when authoring. Every slide DeckPilot generates from a template inherits the brand chrome automatically via pptxgenjs's `defineSlideMaster`, and the LLM can paint the extracted cover background on covers/dividers via `theme.assets` — you stop seeing the LLM redraw your logo or guess at brand colours on every slide.
 >
 > Also in v0.15+: persistent CLI defaults (`deckpilot config get/set`), full TUI ↔ CLI parity (every menu action has a CLI sibling), template edit/export/import + project rename/export, an in-TUI template editor with `/` search and multi-select, and a comprehensive `docs/CLI-REFERENCE.md`.
 
@@ -187,13 +187,17 @@ A **template** is a reusable style + voice spec stored at `~/.deckpilot/template
 ### Three ways to create one
 
 ```bash
-# 1. From an existing brand .pptx (recommended) — v0.16
+# 1. From an existing brand .pptx (recommended) — v0.16+
 deckpilot template create acme --from ~/AcmeBrand.pptx
 #    The OOXML extractor pulls:
 #      - the source's brand master (background, logo, footer chrome),
 #        copying media into ~/.deckpilot/templates/acme/assets/
+#      - the title slide's full-bleed cover background into
+#        assets/cover-background.* (v0.17), deduped against the master bg
 #      - paletteSamples — every distinct hex the source uses prominently
 #        (cards, chart series, accents) sorted by frequency, capped at 12
+#      - themePalette — the named brand swatches from theme1.xml's
+#        clrScheme (accent1-6, dark/light, hyperlinks) (v0.17)
 #      - donorGeometry — each source slide's named-shape layout catalog
 #        (positions in inches, fonts, fills, sample text)
 #    Then a vision-driven LLM pass authors voiceHints, copyRules,
@@ -447,7 +451,8 @@ rm -rf ~/.deckpilot           # projects + templates + config; irreversible
 - ✅ **v0.13** — Bundled DesignSystem presets, expanded glyph set, DECKPILOT.md per-directory style guide.
 - ✅ **v0.14** — Native **Windows support** (`install.ps1`), corporate-proxy-safe zip-download bootstrap, cross-platform-binding rule across the codebase, PowerShell 5.1 compatibility.
 - ✅ **v0.15** — Persistent CLI defaults (`deckpilot config`), **full TUI ↔ CLI parity**: every menu action has a CLI sibling (`template edit/export/import`, `project rename/export`, bulk-delete via varargs). In-TUI template editor with `/` search, multi-select, breadcrumbs, spinners. Comprehensive `docs/CLI-REFERENCE.md`. `save_deck` no longer clutters the working directory.
-- ✅ **v0.16 (current)** — Faithful brand reproduction. `template create --from <pptx>` extracts the source's brand **master** (background + logo + footer chrome), **paletteSamples** (working palette across all slides), and **donorGeometry** (per-slide layout vocabulary). The renderer applies the master via pptxgenjs's `defineSlideMaster` so every generated slide inherits brand chrome automatically — the code-gen LLM never redraws the logo. Unified create wizard in the TUI; `--no-master` / `--no-donor-geometry` / `--max-donor-slides` flags for control.
+- ✅ **v0.16** — Faithful brand reproduction. `template create --from <pptx>` extracts the source's brand **master** (background + logo + footer chrome), **paletteSamples** (working palette across all slides), and **donorGeometry** (per-slide layout vocabulary). The renderer applies the master via pptxgenjs's `defineSlideMaster` so every generated slide inherits brand chrome automatically — the code-gen LLM never redraws the logo. Unified create wizard in the TUI; `--no-master` / `--no-donor-geometry` / `--max-donor-slides` flags for control.
+- ✅ **v0.17 (current)** — Deeper donor extraction. `template create --from <pptx>` now also pulls the title slide's full-bleed **cover background** (resolved through slide → layout → title/section-header layouts, deduped against the master background) into `assets/cover-background.*`, and the donor's **full theme palette** (`themePalette` — all six accents + dark/light + hyperlink colours from `theme1.xml`'s `clrScheme`) alongside `paletteSamples`. `theme.assets` is now actually threaded onto the frozen theme the slide code sees, so the code-gen LLM can paint the cover background on covers/dividers. New `--no-cover-background` opt-out for the shallow path.
 
 ## License
 

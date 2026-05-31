@@ -63,6 +63,7 @@ To share a template: zip the directory, send it, recipient unzips into their
 | `guidance`      | `string` ≤4096       | no       | Long-form style guidance (composition habits, taboos, references). Appended verbatim. |
 | `master`        | `Master`             | no       | Brand chrome (background + logo / footer / rail objects) applied via pptxgenjs's `defineSlideMaster`. Populated by extraction from the source `.pptx`. See "Master" below. |
 | `paletteSamples`| array of 6-hex (≤12) | no       | Distinct colours used prominently across the source's slides, sorted by frequency. The code-gen LLM picks from this list for cards / chart series instead of inventing hexes. |
+| `themePalette`  | `ThemePalette`       | no       | The source's canonical theme colour scheme (`theme1.xml` `clrScheme`) — the named brand swatches PowerPoint shows in its colour picker. See "themePalette" below. |
 | `donorGeometry` | array of `Donor` (≤40)| no      | Per-source-slide layout descriptors. The code-gen LLM sees these as the source deck's layout vocabulary. See "Donor geometry" below. |
 
 ### `master` (v0.16+)
@@ -98,6 +99,24 @@ descending. Walks every `ppt/slides/slideN.xml` and aggregates every
 Surfaced to the code-gen LLM in the system prompt as the deck's "working
 palette" — the LLM uses these hexes for category cards, chart series,
 callouts, etc. instead of inventing new colours.
+
+### `themePalette` (v0.17+)
+
+The source deck's canonical theme colour scheme — read verbatim from
+`ppt/theme/theme1.xml`'s `<a:clrScheme>`, the ~8–12 named swatches
+PowerPoint exposes in its colour picker. Where `paletteSamples` is
+*usage-frequency* (what the slides actually paint with), `themePalette` is
+the *declared brand palette*. Both are surfaced to the code-gen LLM.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `dk1` / `lt1` | 6-hex | Primary dark / light (usually text vs. background). |
+| `dk2` / `lt2` | 6-hex | Secondary dark / light. |
+| `accent1`–`accent6` | 6-hex | The six brand accents. The renderable `theme` (accent / accentAlt / …) maps a 5-colour subset of these; `accent4`–`accent6` live here as context. |
+| `hyperlink` / `followedHyperlink` | 6-hex | Link colours. |
+
+All fields are optional (a source may not define every slot). Hex strings
+have no leading `#`.
 
 ### `donorGeometry` (v0.16+)
 
@@ -141,10 +160,13 @@ logo doesn't break a deck render).
 |---------------|-----------------------|-------------|
 | `logo`        | relative path string  | Primary brand mark. E.g. `"assets/logo.png"`. |
 | `wordmark`    | relative path string  | Wordmark / type lockup, if separate from the logo. |
-| `background`  | relative path string  | Optional background image used on covers or section dividers. |
+| `background`  | relative path string  | Cover / section-divider background image. As of v0.17, extraction auto-populates this from the source's title slide (`assets/cover-background.*`); you can also set it by hand. |
 
 Resolved at load time, the LLM's slide code sees these as absolute paths in
-`theme.assets`:
+`theme.assets`. As of v0.17 this is genuinely threaded onto the frozen
+`theme` the sandbox exposes (it was previously documented but dropped before
+reaching slide code), so the cover background is paintable on covers and
+dividers:
 
 ```js
 if (theme.assets?.logo) {

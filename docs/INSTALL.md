@@ -41,7 +41,7 @@ into a **fast update mode** when it detects an existing install.
 ## How it runs
 
 ```
-DeckPilot installer v0.16.0
+DeckPilot installer v0.17.0
 · Preflight
 ✓ Node 22.22.1
 ✓ Disk: 14823 MB free in /home/you/.deckpilot
@@ -67,7 +67,7 @@ Install libreoffice poppler now? [y/N] y
 · Linking globally (npm link)
 ✓ Linked into /usr/local/bin/deckpilot
 · Smoke test
-✓ deckpilot/0.13.0 linux-x64 node-v22.22.1
+✓ deckpilot/0.17.0 linux-x64 node-v22.22.1
 · Running deckpilot doctor
 ✓ Node ≥ 20 — node v22.22.1
 ✓ GitHub token resolvable — source: env COPILOT_GITHUB_TOKEN
@@ -233,6 +233,6 @@ it there). Usually a slow registry / corporate proxy.
 
 **I want to install a specific version / branch**
 ```bash
-DECKPILOT_REF=v0.16.0 ./install.sh         # tag
+DECKPILOT_REF=v0.17.0 ./install.sh         # tag
 DECKPILOT_REF=feature/x ./install.sh       # branch
 ```
