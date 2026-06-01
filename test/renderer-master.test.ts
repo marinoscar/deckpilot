@@ -128,3 +128,92 @@ describe('renderDeck — master inheritance', () => {
     expect(zip.file('ppt/presentation.xml')).not.toBeNull();
   });
 });
+
+describe('renderDeck — cover vs content backgrounds', () => {
+  const CONTENT = 'EEEEEE';
+  const COVER = '111133';
+
+  function profileWith(master: TemplateProfile['master']): TemplateProfile {
+    return {
+      sourcePath: 'x',
+      aspect: '16:9',
+      slideSize: { width: 13.33, height: 7.5 },
+      colors: { accent: '1A2B5E', paper: 'FFFFFF' },
+      fonts: { heading: 'Inter Tight', body: 'Inter' },
+      layoutNames: [],
+      master,
+      rootDir: root,
+    };
+  }
+
+  const ROLE_BRIEF: DeckBrief = DeckBriefSchema.parse({
+    meta: { title: 'roles', author: 'DeckPilot' },
+    theme: { accent: '1A2B5E', accentAlt: 'C8202E', tone: 'editorial', aspect: '16:9' },
+    slides: [
+      { id: 'a', title: 'Cover', purpose: 'cover.', role: 'cover' },
+      { id: 'b', title: 'Body', purpose: 'content.', role: 'content' },
+      { id: 'c', title: 'Section', purpose: 'divider.', role: 'divider' },
+    ],
+  });
+  const ROLE_CODE = new Map<string, string>(
+    ['a', 'b', 'c'].map((id) => [
+      id,
+      `function render(slide){ slide.addText('${id}', { x:1, y:3, w:11, h:1 }); }`,
+    ]),
+  );
+
+  it('applies coverBackground to cover + divider slides; content inherits the master', async () => {
+    const template = profileWith({
+      background: { type: 'solid', color: CONTENT },
+      coverBackground: { type: 'solid', color: COVER },
+    });
+    const out = join(root, 'roles.pptx');
+    await renderDeck(ROLE_BRIEF, ROLE_CODE, out, { template });
+
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    const s1 = await zip.file('ppt/slides/slide1.xml')!.async('string'); // cover
+    const s2 = await zip.file('ppt/slides/slide2.xml')!.async('string'); // content
+    const s3 = await zip.file('ppt/slides/slide3.xml')!.async('string'); // divider
+
+    // Cover + divider carry their own background with the cover colour.
+    expect(s1).toMatch(/<p:bg>/);
+    expect(s1).toContain(COVER);
+    expect(s3).toContain(COVER);
+    // Content slide inherits the master content background — no own <p:bg>.
+    expect(s2).not.toMatch(/<p:bg>/);
+  });
+
+  it('treats slide 1 as the cover when no roles are set', async () => {
+    const noRole: DeckBrief = DeckBriefSchema.parse({
+      meta: { title: 'norole' },
+      theme: { accent: '1A2B5E', accentAlt: 'C8202E', tone: 'editorial', aspect: '16:9' },
+      slides: [
+        { id: 'a', title: 'A', purpose: 'a.' },
+        { id: 'b', title: 'B', purpose: 'b.' },
+      ],
+    });
+    const template = profileWith({
+      background: { type: 'solid', color: CONTENT },
+      coverBackground: { type: 'solid', color: COVER },
+    });
+    const out = join(root, 'norole.pptx');
+    await renderDeck(noRole, CODE, out, { template });
+
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    const s1 = await zip.file('ppt/slides/slide1.xml')!.async('string');
+    const s2 = await zip.file('ppt/slides/slide2.xml')!.async('string');
+    expect(s1).toContain(COVER);
+    expect(s2).not.toMatch(/<p:bg>/);
+  });
+
+  it('regression: master with only a content background → no per-slide override', async () => {
+    const template = profileWith({ background: { type: 'solid', color: CONTENT } });
+    const out = join(root, 'content-only.pptx');
+    await renderDeck(ROLE_BRIEF, ROLE_CODE, out, { template });
+
+    const zip = await JSZip.loadAsync(readFileSync(out));
+    const s1 = await zip.file('ppt/slides/slide1.xml')!.async('string');
+    // No coverBackground → cover inherits the master content background.
+    expect(s1).not.toMatch(/<p:bg>/);
+  });
+});

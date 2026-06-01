@@ -1031,8 +1031,18 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
     lines.push(
       '',
       '### Brand master is already on every slide',
-      "The template's logo, background, and persistent chrome (logo, footer band, side rails, etc.) are painted by the renderer's slide master BEFORE your code runs. Add the body content — titles, body text, charts, lists, accents — but DO NOT redraw the logo, repaint the background, or recreate the footer. They're already there.",
+      "The template's logo, footer band, side rails and other persistent chrome are painted by the renderer's slide master BEFORE your code runs. Add the body content — titles, body text, charts, lists, accents — but DO NOT redraw the logo or recreate the footer. They're already there.",
     );
+    const m = template.master;
+    if (m.coverBackground) {
+      lines.push(
+        'Backgrounds are applied automatically by slide role: cover and section-divider slides get the brand cover background; every other slide gets the content background. Set each slide\'s `role` ("cover" / "divider" / "content") in the brief so the right one lands, and do NOT call `slide.background` yourself while this template is active — the renderer owns it.',
+      );
+    } else if (m.background) {
+      lines.push(
+        'The brand content background is painted on every slide automatically. Do NOT call `slide.background` yourself — the renderer owns it.',
+      );
+    }
   }
 
   if (template.assets?.logo) {
@@ -1049,7 +1059,9 @@ function renderTemplateGuidance(template: ResolvedTemplate): string {
   if (template.assets?.background) {
     lines.push(
       '',
-      `Cover background available at \`theme.assets.background\` (absolute path: ${template.assets.background}). This is the source deck's full-bleed title/cover image. Paint it on COVER and SECTION-DIVIDER slides only — \`slide.background = { path: theme.assets.background }\` — then lay the title/section text over it. Do NOT use it on ordinary body slides. Guard with \`if (theme.assets?.background)\`.`,
+      template.master?.coverBackground
+        ? `Cover background lives at \`theme.assets.background\` (absolute path: ${template.assets.background}). The renderer already paints it on cover/divider slides via slide role — you do NOT need to set it. Reference it only if a specific design calls for the image elsewhere; guard with \`if (theme.assets?.background)\`.`
+        : `Cover background available at \`theme.assets.background\` (absolute path: ${template.assets.background}). This is the source deck's full-bleed title/cover image. Paint it on COVER and SECTION-DIVIDER slides only — \`slide.background = { path: theme.assets.background }\` — then lay the title/section text over it. Do NOT use it on ordinary body slides. Guard with \`if (theme.assets?.background)\`.`,
     );
   }
 

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSZip from 'jszip';
 import { afterAll, describe, expect, it } from 'vitest';
-import { extractMasterFromPptx } from '../src/template/master-extract.js';
+import { extractContentBackground, extractMasterFromPptx } from '../src/template/master-extract.js';
 
 const FIXTURE = join(process.cwd(), 'test/fixtures/sample-branded.pptx');
 
@@ -123,5 +123,130 @@ describe('extractMasterFromPptx — sample-branded.pptx fixture', () => {
     const result = await extractMasterFromPptx(zip, undefined);
     expect(result.master).toBeUndefined();
     expect(result.copiedAssets).toEqual([]);
+  });
+});
+
+// ---- extractContentBackground ------------------------------------------------
+
+const NS =
+  'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+  'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ' +
+  'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const RELNS = 'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"';
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII=',
+  'base64',
+);
+
+/** A slide whose `<p:bg>` is a blip fill referencing `rId1` (mapped to media via rels). */
+function imgSlide(): string {
+  return `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId1"/></a:blipFill></p:bgPr></p:bg><p:spTree/></p:cSld></p:sld>`;
+}
+function solidSlide(hex: string): string {
+  return `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hex}"/></a:solidFill></p:bgPr></p:bg><p:spTree/></p:cSld></p:sld>`;
+}
+function emptySlide(): string {
+  return `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:spTree/></p:cSld></p:sld>`;
+}
+function slideRels(entries: { id: string; target: string; image?: boolean }[]): string {
+  const rels = entries
+    .map(
+      (e) =>
+        `<Relationship Id="${e.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${e.image ? 'image' : 'slideLayout'}" Target="${e.target}"/>`,
+    )
+    .join('');
+  return `<?xml version="1.0"?><Relationships ${RELNS}>${rels}</Relationships>`;
+}
+function layout(type?: string): string {
+  return `<?xml version="1.0"?><p:sldLayout ${NS}${type ? ` type="${type}"` : ''}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`;
+}
+
+describe('extractContentBackground', () => {
+  it('copies a content slide image background into assets/content-background.*', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide2.xml', imgSlide());
+    zip.file(
+      'ppt/slides/_rels/slide2.xml.rels',
+      slideRels([{ id: 'rId1', target: '../media/content.png', image: true }]),
+    );
+    zip.file('ppt/media/content.png', PNG);
+    const tplRoot = mkdtempSync(join(root, 'content-img-'));
+
+    const result = await extractContentBackground(zip, tplRoot, 'FFFFFF');
+    expect(result.background).toEqual({ type: 'image', src: 'assets/content-background.png' });
+    expect(result.mediaPath).toBe('ppt/media/content.png');
+    expect(existsSync(join(tplRoot, 'assets', 'content-background.png'))).toBe(true);
+  });
+
+  it('returns a solid background when the content slide has a solid fill', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide2.xml', solidSlide('223344'));
+    const result = await extractContentBackground(zip, undefined, 'FFFFFF');
+    expect(result.background).toEqual({ type: 'solid', color: '223344' });
+    expect(result.copiedAssets).toEqual([]);
+  });
+
+  it('falls back to the paper colour when no background exists', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide2.xml', emptySlide());
+    const result = await extractContentBackground(zip, undefined, 'abcdef');
+    expect(result.background).toEqual({ type: 'solid', color: 'ABCDEF' });
+  });
+
+  it('does not reuse the excluded cover image as content (falls back to paper)', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide2.xml', imgSlide());
+    zip.file(
+      'ppt/slides/_rels/slide2.xml.rels',
+      slideRels([{ id: 'rId1', target: '../media/shared.png', image: true }]),
+    );
+    zip.file('ppt/media/shared.png', PNG);
+    const tplRoot = mkdtempSync(join(root, 'content-excl-'));
+
+    const result = await extractContentBackground(zip, tplRoot, 'FFFFFF', {
+      excludeMedia: ['ppt/media/shared.png'],
+    });
+    expect(result.background).toEqual({ type: 'solid', color: 'FFFFFF' });
+    expect(existsSync(join(tplRoot, 'assets', 'content-background.png'))).toBe(false);
+  });
+
+  it('reuses an already-copied master background instead of duplicating it', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide2.xml', imgSlide());
+    zip.file(
+      'ppt/slides/_rels/slide2.xml.rels',
+      slideRels([{ id: 'rId1', target: '../media/master.png', image: true }]),
+    );
+    zip.file('ppt/media/master.png', PNG);
+    const tplRoot = mkdtempSync(join(root, 'content-reuse-'));
+
+    const result = await extractContentBackground(zip, tplRoot, 'FFFFFF', {
+      knownMedia: new Map([['ppt/media/master.png', 'assets/master-background.png']]),
+    });
+    expect(result.background).toEqual({ type: 'image', src: 'assets/master-background.png' });
+    expect(result.copiedAssets).toEqual([]);
+    expect(existsSync(join(tplRoot, 'assets', 'content-background.png'))).toBe(false);
+  });
+
+  it('skips title/sectionHeader slides when choosing the representative slide', async () => {
+    const zip = new JSZip();
+    // slide1 is the cover (always skipped); slide2 uses a title layout; slide3 is content.
+    zip.file('ppt/slides/slide1.xml', emptySlide());
+    zip.file('ppt/slides/slide2.xml', solidSlide('AAAAAA'));
+    zip.file(
+      'ppt/slides/_rels/slide2.xml.rels',
+      slideRels([{ id: 'rIdL', target: '../slideLayouts/slideLayout1.xml' }]),
+    );
+    zip.file('ppt/slides/slide3.xml', solidSlide('556677'));
+    zip.file(
+      'ppt/slides/_rels/slide3.xml.rels',
+      slideRels([{ id: 'rIdL', target: '../slideLayouts/slideLayout2.xml' }]),
+    );
+    zip.file('ppt/slideLayouts/slideLayout1.xml', layout('title'));
+    zip.file('ppt/slideLayouts/slideLayout2.xml', layout());
+
+    const result = await extractContentBackground(zip, undefined, 'FFFFFF');
+    // slide2 (title layout) is skipped → slide3's solid is the content background.
+    expect(result.background).toEqual({ type: 'solid', color: '556677' });
   });
 });

@@ -3,10 +3,14 @@ import { resolve } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { extractDonorGeometry } from './donor-geometry.js';
-import { extractCoverBackground, extractMasterFromPptx } from './master-extract.js';
+import {
+  extractContentBackground,
+  extractCoverBackground,
+  extractMasterFromPptx,
+} from './master-extract.js';
 import { type ThemeSchemeMap, aggregatePalette, readThemeSchemeMap } from './palette-aggregate.js';
 import type { TemplateProfile } from './profile.js';
-import type { ThemePalette } from './spec.js';
+import type { Master, MasterBackground, MasterObject, ThemePalette } from './spec.js';
 
 /**
  * Fallback colours/fonts when a template has no explicit theme part. Kept
@@ -44,6 +48,7 @@ export type InspectOpts = {
   templateRootDir?: string;
   extractMaster?: boolean;
   extractCoverBackground?: boolean;
+  extractContentBackground?: boolean;
   extractPalette?: boolean;
   extractDonorGeometry?: boolean;
   maxDonorSlides?: number;
@@ -89,27 +94,69 @@ export async function inspectTemplate(
     layoutNames,
   };
 
-  // v0.16 enrichments — each is independently opt-out via opts.
+  // v0.16+ enrichments — each is independently opt-out via opts. The master
+  // now carries up to two backgrounds: `background` (content / all-slides) and
+  // `coverBackground` (cover + section dividers), composed below.
+  let masterObjects: MasterObject[] | undefined;
+  let masterOwnBackground: MasterBackground | undefined;
   let masterBackgroundMedia: string | undefined;
   if (opts.extractMaster !== false) {
     const { master, copiedAssets, backgroundMedia } = await extractMasterFromPptx(
       zip,
       opts.templateRootDir,
     );
-    if (master) profile.master = master;
+    masterObjects = master?.objects;
+    masterOwnBackground = master?.background;
     if (copiedAssets.length > 0) profile.copiedAssets = copiedAssets;
     masterBackgroundMedia = backgroundMedia;
   }
 
   // Cover/title background — a full-bleed hero for covers/dividers, distinct
-  // from the all-slides master background. Lands in assets.background; the
-  // code-gen LLM paints it where appropriate.
-  if (opts.extractCoverBackground !== false) {
+  // from the all-slides master background. Mirrored to assets.background for
+  // back-compat; also drives master.coverBackground for deterministic render.
+  let coverBackground: MasterBackground | undefined;
+  let coverMedia: string | undefined;
+  if (opts.extractMaster !== false && opts.extractCoverBackground !== false) {
     const cover = await extractCoverBackground(zip, opts.templateRootDir, masterBackgroundMedia);
-    if (cover.src) profile.assets = { ...profile.assets, background: cover.src };
+    if (cover.src) {
+      profile.assets = { ...profile.assets, background: cover.src };
+      coverBackground = { type: 'image', src: cover.src };
+      coverMedia = cover.mediaPath;
+    }
     if (cover.copiedAssets.length > 0) {
       profile.copiedAssets = [...(profile.copiedAssets ?? []), ...cover.copiedAssets];
     }
+  }
+
+  // Content background — what body slides inherit. Image when the deck has one
+  // (reusing the already-copied master background when identical), else a solid
+  // fill, else the deck's paper colour. Excludes the cover image.
+  let contentBackground: MasterBackground | undefined;
+  if (opts.extractMaster !== false && opts.extractContentBackground !== false) {
+    const known = new Map<string, string>();
+    if (masterBackgroundMedia && masterOwnBackground?.type === 'image') {
+      known.set(masterBackgroundMedia, masterOwnBackground.src);
+    }
+    const content = await extractContentBackground(
+      zip,
+      opts.templateRootDir,
+      colors.paper ?? 'FFFFFF',
+      { excludeMedia: coverMedia ? [coverMedia] : [], knownMedia: known },
+    );
+    contentBackground = content.background;
+    if (content.copiedAssets.length > 0) {
+      profile.copiedAssets = [...(profile.copiedAssets ?? []), ...content.copiedAssets];
+    }
+  }
+
+  // Compose the master: chrome objects + content background + cover override.
+  const masterBg = contentBackground ?? masterOwnBackground;
+  if (masterObjects || masterBg || coverBackground) {
+    const master: Master = {};
+    if (masterBg) master.background = masterBg;
+    if (coverBackground) master.coverBackground = coverBackground;
+    if (masterObjects) master.objects = masterObjects;
+    profile.master = master;
   }
 
   // Palette + donor geometry both need the theme scheme map. Build it once.

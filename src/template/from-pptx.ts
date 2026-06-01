@@ -21,9 +21,10 @@ export type TemplateFromPptxOpts = {
    * it undefined and gets master.objects without image entries.
    */
   templateRootDir?: string;
-  /** Opt-outs for the v0.16 extractors (CLI --no-* flags). */
+  /** Opt-outs for the v0.16+ extractors (CLI --no-* flags). */
   extractMaster?: boolean;
   extractCoverBackground?: boolean;
+  extractContentBackground?: boolean;
   extractPalette?: boolean;
   extractDonorGeometry?: boolean;
   maxDonorSlides?: number;
@@ -49,6 +50,7 @@ export async function templateFromPptx(
     templateRootDir: opts.templateRootDir,
     extractMaster: opts.extractMaster,
     extractCoverBackground: opts.extractCoverBackground,
+    extractContentBackground: opts.extractContentBackground,
     extractPalette: opts.extractPalette,
     extractDonorGeometry: opts.extractDonorGeometry,
     maxDonorSlides: opts.maxDonorSlides,

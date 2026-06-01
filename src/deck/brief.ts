@@ -31,6 +31,12 @@ export const SlideBriefSchema = z.object({
   purpose: PurposeText.describe(
     'One or two sentences saying what this slide should communicate. Used as the brief the LLM consults when writing the slide-render function.',
   ),
+  role: z
+    .enum(['cover', 'divider', 'content'])
+    .optional()
+    .describe(
+      "Slide role: 'cover' = title/opening slide, 'divider' = section break, 'content' = body. Drives which brand background a template applies (cover/divider get the cover background; content gets the content background). When omitted, slide 1 is treated as the cover and the rest as content.",
+    ),
   notes: NotesText.optional().describe('Speaker notes — plain prose, no markdown.'),
 });
 export type SlideBrief = z.infer<typeof SlideBriefSchema>;

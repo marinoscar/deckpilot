@@ -191,6 +191,11 @@ theme.assets?.background  // absolute path to a background image, or undefined
 Place these via \`slide.addImage({ path: theme.assets.logo, x, y, w, h })\`.
 ALWAYS guard with \`if (theme.assets?.logo)\` — assets are optional.
 
+Note: under an active brand template the renderer paints brand backgrounds for
+you, by slide role (cover/divider vs content) — you normally should NOT set
+\`slide.background\` or place \`theme.assets.background\` yourself. Manual
+backgrounds are mainly for no-template decks.
+
 ## helpers
 
 \`\`\`

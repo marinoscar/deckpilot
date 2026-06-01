@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSZip from 'jszip';
@@ -100,5 +100,88 @@ describe('templateFromPptx — cover background + full theme palette', () => {
 
     expect(spec.assets?.background).toBeUndefined();
     expect(spec.themePalette).toBeUndefined();
+  });
+});
+
+/** Write an arbitrary set of zip parts to a .pptx on disk; returns its path. */
+async function writePptx(name: string, parts: Record<string, string | Buffer>): Promise<string> {
+  const zip = new JSZip();
+  zip.file(
+    'ppt/presentation.xml',
+    `<?xml version="1.0"?><p:presentation ${NS}><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`,
+  );
+  zip.file('ppt/theme/theme1.xml', THEME);
+  for (const [path, body] of Object.entries(parts)) zip.file(path, body);
+  const buf = await zip.generateAsync({ type: 'nodebuffer' });
+  const path = join(root, name);
+  writeFileSync(path, buf);
+  return path;
+}
+
+const imgBg = (rid: string) =>
+  `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:bg><p:bgPr><a:blipFill><a:blip r:embed="${rid}"/></a:blipFill></p:bgPr></p:bg><p:spTree/></p:cSld></p:sld>`;
+const emptySld = `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:spTree/></p:cSld></p:sld>`;
+const imgRels = (target: string, layout?: string) =>
+  `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${target}"/>${
+    layout
+      ? `<Relationship Id="rIdL" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="${layout}"/>`
+      : ''
+  }</Relationships>`;
+const sldLayout = (type?: string) =>
+  `<?xml version="1.0"?><p:sldLayout ${NS}${type ? ` type="${type}"` : ''}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`;
+
+describe('templateFromPptx — cover vs content backgrounds', () => {
+  it('captures distinct cover + content backgrounds', async () => {
+    const pptx = await writePptx('distinct.pptx', {
+      'ppt/slides/slide1.xml': imgBg('rId1'),
+      'ppt/slides/_rels/slide1.xml.rels': imgRels(
+        '../media/cover.png',
+        '../slideLayouts/slideLayout1.xml',
+      ),
+      'ppt/slides/slide2.xml': imgBg('rId1'),
+      'ppt/slides/_rels/slide2.xml.rels': imgRels(
+        '../media/content.png',
+        '../slideLayouts/slideLayout2.xml',
+      ),
+      'ppt/slideLayouts/slideLayout1.xml': sldLayout('title'),
+      'ppt/slideLayouts/slideLayout2.xml': sldLayout(),
+      'ppt/media/cover.png': PNG_BYTES,
+      'ppt/media/content.png': PNG_BYTES,
+    });
+    const tplRoot = mkdtempSync(join(root, 'tpl-distinct-'));
+
+    const spec = await templateFromPptx('brandx', pptx, { templateRootDir: tplRoot });
+
+    expect(spec.assets?.background).toBe('assets/cover-background.png');
+    expect(spec.master?.coverBackground).toEqual({
+      type: 'image',
+      src: 'assets/cover-background.png',
+    });
+    expect(spec.master?.background).toEqual({
+      type: 'image',
+      src: 'assets/content-background.png',
+    });
+    expect(existsSync(join(tplRoot, 'assets', 'cover-background.png'))).toBe(true);
+    expect(existsSync(join(tplRoot, 'assets', 'content-background.png'))).toBe(true);
+  });
+
+  it('a single shared background does not duplicate the asset or set coverBackground', async () => {
+    const pptx = await writePptx('shared.pptx', {
+      // Both slides inherit the master background; no distinct cover image.
+      'ppt/slideMasters/slideMaster1.xml': `<?xml version="1.0"?><p:sldMaster ${NS}><p:cSld><p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId1"/></a:blipFill></p:bgPr></p:bg><p:spTree/></p:cSld></p:sldMaster>`,
+      'ppt/slideMasters/_rels/slideMaster1.xml.rels': imgRels('../media/master.png'),
+      'ppt/slides/slide1.xml': emptySld,
+      'ppt/slides/slide2.xml': emptySld,
+      'ppt/media/master.png': PNG_BYTES,
+    });
+    const tplRoot = mkdtempSync(join(root, 'tpl-shared-'));
+
+    const spec = await templateFromPptx('brandx', pptx, { templateRootDir: tplRoot });
+
+    expect(spec.master?.background).toEqual({ type: 'image', src: 'assets/master-background.png' });
+    expect(spec.master?.coverBackground).toBeUndefined();
+    expect(spec.assets?.background).toBeUndefined();
+    // The content extractor reused the master asset — no duplicate file.
+    expect(existsSync(join(tplRoot, 'assets', 'content-background.png'))).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ const PptxGenJS = pptxgenjsImport as unknown as new () => any;
 import type { DeckBrief } from '../deck/brief.js';
 import type { Theme } from '../deck/theme.js';
 import type { TemplateProfile } from '../template/profile.js';
-import type { Master } from '../template/spec.js';
+import type { Master, MasterBackground } from '../template/spec.js';
 import { SlideCodeError, type ThemeAssets, runSlideCode } from './sandbox.js';
 
 const MASTER_NAME = 'TemplateMaster';
@@ -59,12 +59,26 @@ export async function renderDeck(
   // e.g. the cover background on covers/dividers — guarded by `if (theme.assets?.…)`.
   const themeAssets = resolveThemeAssets(opts.template?.assets, masterRootDir);
 
-  for (const slideBrief of brief.slides) {
+  for (let i = 0; i < brief.slides.length; i++) {
+    const slideBrief = brief.slides[i]!;
     const s = masterActive ? pres.addSlide({ masterName: MASTER_NAME }) : pres.addSlide();
-    // Default paper background — but only when the master isn't already
-    // painting its own. When the master sets a background, leaving this in
-    // would override the brand chrome.
-    if (!master?.background) {
+
+    // Background resolution:
+    //  - Cover / section-divider slides get the cover background, overriding
+    //    the master's content background for that slide. A slide is a
+    //    cover/divider when its brief role says so, or (legacy briefs with no
+    //    role) when it's slide 1.
+    //  - Everything else inherits the master's content background, or falls
+    //    back to paper when the master defines none.
+    const role = slideBrief.role;
+    const isCoverBg = role === 'cover' || role === 'divider' || (role === undefined && i === 0);
+    const coverBg =
+      isCoverBg && master?.coverBackground
+        ? backgroundToPptx(master.coverBackground, masterRootDir)
+        : undefined;
+    if (coverBg) {
+      s.background = coverBg;
+    } else if (!master?.background) {
       s.background = { color: theme.paper };
     }
 
@@ -128,12 +142,8 @@ function applyMaster(
 ): void {
   const props: Record<string, unknown> = { title: MASTER_NAME };
   if (master.background) {
-    if (master.background.type === 'solid') {
-      props.background = { color: master.background.color };
-    } else if (master.background.type === 'image') {
-      const path = resolveSrc(master.background.src, rootDir);
-      if (path) props.background = { path };
-    }
+    const bg = backgroundToPptx(master.background, rootDir);
+    if (bg) props.background = bg;
   }
   if (master.objects && master.objects.length > 0) {
     const out: Record<string, unknown>[] = [];
@@ -172,6 +182,22 @@ function applyMaster(
     if (out.length > 0) props.objects = out;
   }
   pres.defineSlideMaster(props);
+}
+
+/**
+ * Translate a MasterBackground into the pptxgenjs background shape — `{ color }`
+ * for solids, `{ path }` for images. Returns undefined when an image src can't
+ * be resolved (no rootDir), so the caller can fall back rather than emit a
+ * broken reference. Shared by `applyMaster` (master-level) and the per-slide
+ * cover-background override.
+ */
+function backgroundToPptx(
+  bg: MasterBackground,
+  rootDir: string | undefined,
+): { color: string } | { path: string } | undefined {
+  if (bg.type === 'solid') return { color: bg.color };
+  const path = resolveSrc(bg.src, rootDir);
+  return path ? { path } : undefined;
 }
 
 /**

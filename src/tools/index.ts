@@ -120,7 +120,8 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
     defineTool('propose_deck_brief', {
       description: [
         'PHASE 1. Author or replace the working DeckBrief. This is the outline the user approves before any slide code is written.',
-        'A brief has: meta (title, subtitle?, author?, audience?), theme (palette + fonts + tone hint + aspect), and slides (each with id, title, purpose, optional notes).',
+        'A brief has: meta (title, subtitle?, author?, audience?), theme (palette + fonts + tone hint + aspect), and slides (each with id, title, purpose, an optional role, and optional notes).',
+        'Set each slide\'s role: "cover" for the opening/title slide, "divider" for section breaks, "content" for body slides. It drives which brand background a template applies (cover/divider get the cover background; content gets the content background).',
         "Choose the theme yourself — DeckPilot does NOT use presets. Invent a coherent palette (accent + complementary accentAlt, ink, muted, paper) and font pair that fits the user's ask. If a DECKPILOT.md style guide was loaded, honour it.",
         'After this tool succeeds, present the outline to the user as readable prose and wait for approval. Do not start writing slide code until the user says go/build/proceed.',
       ].join(' '),

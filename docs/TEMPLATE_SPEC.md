@@ -61,7 +61,7 @@ To share a template: zip the directory, send it, recipient unzips into their
 | `voiceHints`    | `string` ≤1024       | no       | 1-3 sentences nudging copy voice. Appended verbatim to the LLM's system prompt. |
 | `copyRules`     | `string` ≤2048       | no       | Bullet list of must/never rules. Appended verbatim. |
 | `guidance`      | `string` ≤4096       | no       | Long-form style guidance (composition habits, taboos, references). Appended verbatim. |
-| `master`        | `Master`             | no       | Brand chrome (background + logo / footer / rail objects) applied via pptxgenjs's `defineSlideMaster`. Populated by extraction from the source `.pptx`. See "Master" below. |
+| `master`        | `Master`             | no       | Brand chrome (logo / footer / rail objects) + the content and cover backgrounds, applied via pptxgenjs's `defineSlideMaster`. Populated by extraction from the source `.pptx`. See "Master" below. |
 | `paletteSamples`| array of 6-hex (≤12) | no       | Distinct colours used prominently across the source's slides, sorted by frequency. The code-gen LLM picks from this list for cards / chart series instead of inventing hexes. |
 | `themePalette`  | `ThemePalette`       | no       | The source's canonical theme colour scheme (`theme1.xml` `clrScheme`) — the named brand swatches PowerPoint shows in its colour picker. See "themePalette" below. |
 | `donorGeometry` | array of `Donor` (≤40)| no      | Per-source-slide layout descriptors. The code-gen LLM sees these as the source deck's layout vocabulary. See "Donor geometry" below. |
@@ -77,7 +77,8 @@ master's background + objects appear on every generated slide automatically
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `background.type` | `'solid'` or `'image'` | Slide-wide background. `solid.color` is a 6-hex; `image.src` is a path relative to the template dir. |
+| `background.type` | `'solid'` or `'image'` | **Content / all-slides background** — what body slides inherit. `solid.color` is a 6-hex; `image.src` is a path relative to the template dir. |
+| `coverBackground` | `{ type: 'solid' \| 'image' }` | **Cover / divider background** (v0.18). Overrides `background` on cover and section-divider slides (see "Backgrounds by slide role"). Same shape as `background`. |
 | `objects[*]` | discriminated union by `kind` | One per master shape. |
 | `objects[*].kind` | `'image'` / `'rect'` / `'text'` | The three master object shapes we know how to deterministically extract and re-emit. |
 | `objects[*].{x,y,w,h}` | numbers in inches | Position and size. |
@@ -88,6 +89,30 @@ master's background + objects appear on every generated slide automatically
 The extractor walks `ppt/slideMasters/slideMaster1.xml` first; if that has
 no chrome (which is true for pptxgenjs-emitted decks), it falls back to
 each `ppt/slideLayouts/slideLayoutN.xml` referenced by the master.
+
+### Backgrounds by slide role (v0.18+)
+
+Brand decks usually have two background patterns: a full-bleed **cover
+background** for the title slide (and section dividers), and a **content
+background** for body slides. The template models both and the renderer
+applies them deterministically — the LLM never paints them:
+
+- `master.background` — the **content background**. Applied to every slide via
+  the slide master. Extraction resolves a representative content slide's
+  effective background (slide → its layout → the master): an image when the
+  deck has one, otherwise a solid fill in the deck's **paper colour**
+  (`theme.paper`) so body slides still get a deliberate canvas.
+- `master.coverBackground` — the **cover background**. The renderer overrides
+  `background` with this on **cover** and **section-divider** slides. A slide
+  counts as cover/divider when its brief `role` is `'cover'` / `'divider'`
+  (and, for legacy briefs with no `role`, when it's slide 1). It's also
+  mirrored to `assets.background` for backward compatibility.
+
+If the deck has only one background (cover == content), only `background` is
+set and every slide — including the cover — shares it; `coverBackground` is
+omitted. Backgrounds are stretched to fill the slide, so author background
+images at the slide's aspect ratio. The shallow extractor opt-out is
+`--no-content-background`.
 
 ### `paletteSamples` (v0.16+)
 

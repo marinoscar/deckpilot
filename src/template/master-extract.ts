@@ -17,7 +17,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, posix } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import type JSZip from 'jszip';
-import type { Master, MasterObject } from './spec.js';
+import type { Master, MasterBackground, MasterObject } from './spec.js';
 
 const EMU_PER_INCH = 914400;
 
@@ -105,6 +105,11 @@ export type CoverBackgroundResult = {
   src?: string;
   /** Asset paths written into `<templateRootDir>/assets/` (forward slashes). */
   copiedAssets: string[];
+  /**
+   * Zip media path of the emitted cover image (set only when `src` is set), so
+   * the content-background extractor can avoid reusing the cover as content.
+   */
+  mediaPath?: string;
 };
 
 /**
@@ -144,7 +149,172 @@ export async function extractCoverBackground(
   const out = `assets/cover-background.${ext}`;
   await copyMedia(zip, mediaPath, join(templateRootDir, ...out.split('/')));
   copiedAssets.push(out);
-  return { src: out, copiedAssets };
+  return { src: out, copiedAssets, mediaPath };
+}
+
+export type ContentBackgroundResult = {
+  /** The content / all-slides background: a copied image or a solid colour. */
+  background: MasterBackground;
+  /** Asset paths written into `<templateRootDir>/assets/` (forward slashes). */
+  copiedAssets: string[];
+  /** Zip media path when the content background resolved to an image. */
+  mediaPath?: string;
+};
+
+export type ContentBackgroundOpts = {
+  /** Media paths NOT to treat as content (e.g. the cover image). */
+  excludeMedia?: Iterable<string>;
+  /** Already-copied media → relative asset path, reused instead of re-copying. */
+  knownMedia?: Map<string, string>;
+};
+
+/**
+ * Extract the *content* background — the background ordinary body slides
+ * inherit, distinct from the cover hero. Resolves a representative content
+ * slide's effective background (slide → its layout → the slide master), in
+ * order of preference:
+ *
+ *   1. An image background → copied to `assets/content-background.*` (or the
+ *      existing `assets/master-background.*` when it's the same media), unless
+ *      it's the excluded cover image.
+ *   2. A solid-fill background → `{ type: 'solid', color }`.
+ *   3. Fallback: a solid fill of the deck's paper colour.
+ *
+ * Always returns a background so content slides get a deliberate canvas.
+ */
+export async function extractContentBackground(
+  zip: JSZip,
+  templateRootDir: string | undefined,
+  paperHex: string,
+  opts: ContentBackgroundOpts = {},
+): Promise<ContentBackgroundResult> {
+  const copiedAssets: string[] = [];
+  const exclude = new Set(opts.excludeMedia ?? []);
+  const known = opts.knownMedia ?? new Map<string, string>();
+
+  const slidePath = await firstContentSlide(zip);
+
+  // 1. Image background (slide → layout → master), unless it's the cover image.
+  const imageMedia = slidePath ? await effectiveBgImageMedia(zip, slidePath) : undefined;
+  if (imageMedia && !exclude.has(imageMedia)) {
+    const reused = known.get(imageMedia);
+    if (reused) {
+      return { background: { type: 'image', src: reused }, copiedAssets, mediaPath: imageMedia };
+    }
+    if (templateRootDir) {
+      const ext = imageMedia.split('.').pop() ?? 'png';
+      const out = `assets/content-background.${ext}`;
+      await copyMedia(zip, imageMedia, join(templateRootDir, ...out.split('/')));
+      copiedAssets.push(out);
+      return { background: { type: 'image', src: out }, copiedAssets, mediaPath: imageMedia };
+    }
+  }
+
+  // 2. Solid-fill background (slide → layout → master).
+  const solid = slidePath ? await effectiveBgSolid(zip, slidePath) : undefined;
+  if (solid) return { background: { type: 'solid', color: solid }, copiedAssets };
+
+  // 3. Fallback: the deck's paper colour.
+  return { background: { type: 'solid', color: paperHex.toUpperCase() }, copiedAssets };
+}
+
+/**
+ * The first slide we treat as "content": skips slide1 (the cover) and any slide
+ * whose layout is a `title`/`sectionHeader`. Falls back to slide2, then slide1,
+ * when the deck has no clearly-typed content slide.
+ */
+async function firstContentSlide(zip: JSZip): Promise<string | undefined> {
+  const slidePaths = Object.keys(zip.files)
+    .filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p))
+    .sort((a, b) => slideNum(a) - slideNum(b));
+  for (const path of slidePaths) {
+    if (path === 'ppt/slides/slide1.xml') continue;
+    const type = await resolveLayoutType(zip, path);
+    if (type === 'title' || type === 'sectionHeader') continue;
+    return path;
+  }
+  return slidePaths.find((p) => p !== 'ppt/slides/slide1.xml') ?? slidePaths[0];
+}
+
+function slideNum(p: string): number {
+  return Number(p.match(/slide(\d+)\.xml$/)?.[1] ?? 0);
+}
+
+/** Resolve a slide's layout `@_type` (`title` / `sectionHeader` / …) via its rels. */
+async function resolveLayoutType(zip: JSZip, slidePath: string): Promise<string | undefined> {
+  const rels = await readRels(zip, slidePath);
+  const layoutTarget = [...rels.values()].find((t) =>
+    /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(t),
+  );
+  if (!layoutTarget) return undefined;
+  const xml = await zip.file(layoutTarget)?.async('string');
+  if (!xml) return undefined;
+  const parsed = xmlParser.parse(xml) as Record<string, unknown>;
+  const layout = parsed['p:sldLayout'] as Record<string, string> | undefined;
+  return layout?.['@_type'];
+}
+
+/** Effective image background of a slide: slide → its layout → slideMaster1. */
+async function effectiveBgImageMedia(zip: JSZip, slidePath: string): Promise<string | undefined> {
+  const rels = await readRels(zip, slidePath);
+  const fromSlide = await bgBlipMedia(zip, slidePath, 'p:sld', rels);
+  if (fromSlide) return fromSlide;
+
+  const layoutTarget = [...rels.values()].find((t) =>
+    /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(t),
+  );
+  if (layoutTarget) {
+    const layoutRels = await readRels(zip, layoutTarget);
+    const fromLayout = await bgBlipMedia(zip, layoutTarget, 'p:sldLayout', layoutRels);
+    if (fromLayout) return fromLayout;
+  }
+
+  const masterPath = 'ppt/slideMasters/slideMaster1.xml';
+  if (zip.file(masterPath)) {
+    const masterRels = await readRels(zip, masterPath);
+    const fromMaster = await bgBlipMedia(zip, masterPath, 'p:sldMaster', masterRels);
+    if (fromMaster) return fromMaster;
+  }
+  return undefined;
+}
+
+/** Effective solid-fill background hex of a slide: slide → its layout → slideMaster1. */
+async function effectiveBgSolid(zip: JSZip, slidePath: string): Promise<string | undefined> {
+  const fromSlide = await bgSolidHex(zip, slidePath, 'p:sld');
+  if (fromSlide) return fromSlide;
+
+  const rels = await readRels(zip, slidePath);
+  const layoutTarget = [...rels.values()].find((t) =>
+    /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(t),
+  );
+  if (layoutTarget) {
+    const fromLayout = await bgSolidHex(zip, layoutTarget, 'p:sldLayout');
+    if (fromLayout) return fromLayout;
+  }
+
+  const masterPath = 'ppt/slideMasters/slideMaster1.xml';
+  if (zip.file(masterPath)) {
+    const fromMaster = await bgSolidHex(zip, masterPath, 'p:sldMaster');
+    if (fromMaster) return fromMaster;
+  }
+  return undefined;
+}
+
+/** Read `<p:bg><p:bgPr><a:solidFill>` from a part as a 6-hex string. */
+async function bgSolidHex(
+  zip: JSZip,
+  xmlPath: string,
+  rootTag: string,
+): Promise<string | undefined> {
+  const xml = await zip.file(xmlPath)?.async('string');
+  if (!xml) return undefined;
+  const parsed = xmlParser.parse(xml) as Record<string, unknown>;
+  const root = parsed[rootTag] as Record<string, unknown> | undefined;
+  const cSld = root?.['p:cSld'] as Record<string, unknown> | undefined;
+  const bg = cSld?.['p:bg'] as Record<string, unknown> | undefined;
+  const bgPr = bg?.['p:bgPr'] as Record<string, unknown> | undefined;
+  const solid = bgPr?.['a:solidFill'];
+  return solid ? readSolidFillHex(solid) : undefined;
 }
 
 /**

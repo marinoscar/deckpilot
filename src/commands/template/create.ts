@@ -8,7 +8,7 @@ import { blankTemplate } from '../../template/spec.js';
 
 export default class TemplateCreate extends BaseCommand {
   static override description =
-    'Create a new DeckPilot template. With --from <pptx> the OOXML extractor pulls the source\'s brand master (logo + background + footer chrome), palette samples, and per-slide donor geometry; a vision-driven LLM pass then authors voice/copy/guidance + per-donor summaries. Pass --shallow to skip the LLM pass (OOXML only); --no-master / --no-donor-geometry to skip individual extraction steps for debug or token-budget control. Without --from, a blank scaffold is created.';
+    "Create a new DeckPilot template. With --from <pptx> the OOXML extractor pulls the source's brand master (logo + background + footer chrome), palette samples, and per-slide donor geometry; a vision-driven LLM pass then authors voice/copy/guidance + per-donor summaries. Pass --shallow to skip the LLM pass (OOXML only); --no-master / --no-donor-geometry to skip individual extraction steps for debug or token-budget control. Without --from, a blank scaffold is created.";
 
   static override examples = [
     '<%= config.bin %> template create acme-corp --from ./brand.pptx',
@@ -84,9 +84,14 @@ export default class TemplateCreate extends BaseCommand {
         "Skip extracting the title slide's full-bleed cover background into assets.background. The all-slides master background (if any) is still extracted.",
       default: false,
     }),
+    'no-content-background': Flags.boolean({
+      description:
+        "Skip extracting the content-slide background (master.background). Without it, body slides fall back to the deck's paper colour at render time.",
+      default: false,
+    }),
     'max-donor-slides': Flags.integer({
       description:
-        "Cap on slides walked when building the donor-geometry catalog. Default 40 (schema cap). Useful for tightly bounding the chat system-prompt size.",
+        'Cap on slides walked when building the donor-geometry catalog. Default 40 (schema cap). Useful for tightly bounding the chat system-prompt size.',
       required: false,
       default: 40,
       min: 1,
@@ -134,6 +139,7 @@ export default class TemplateCreate extends BaseCommand {
         templateRootDir: templateDir(slug),
         extractMaster: !flags['no-master'],
         extractCoverBackground: !flags['no-cover-background'],
+        extractContentBackground: !flags['no-content-background'],
         extractPalette: !flags['no-palette-samples'],
         extractDonorGeometry: !flags['no-donor-geometry'],
         maxDonorSlides: flags['max-donor-slides'],
@@ -149,10 +155,11 @@ export default class TemplateCreate extends BaseCommand {
       flags['no-master'] ||
       flags['no-donor-geometry'] ||
       flags['no-palette-samples'] ||
-      flags['no-cover-background']
+      flags['no-cover-background'] ||
+      flags['no-content-background']
     ) {
       this.warn(
-        '--no-master / --no-donor-geometry / --no-palette-samples / --no-cover-background only affect the shallow OOXML path; the vision-driven extractor always runs full extraction. Pass --shallow to honour them.',
+        '--no-master / --no-donor-geometry / --no-palette-samples / --no-cover-background / --no-content-background only affect the shallow OOXML path; the vision-driven extractor always runs full extraction. Pass --shallow to honour them.',
       );
     }
     this.log(`Extracting "${slug}" from ${flags.from} …`);

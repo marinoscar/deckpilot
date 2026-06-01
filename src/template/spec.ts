@@ -93,12 +93,24 @@ export type MasterBackground = z.infer<typeof MasterBackgroundSchema>;
  */
 export const MasterSchema = z
   .object({
+    /**
+     * Content / all-slides background. Painted on every generated slide via
+     * pptxgenjs's slide master. When `coverBackground` is also present, the
+     * renderer overrides this on cover + section-divider slides.
+     */
     background: MasterBackgroundSchema.optional(),
+    /**
+     * Cover/divider background. Overrides `background` on the cover slide and
+     * section dividers (slides whose brief `role` is 'cover'/'divider', or
+     * slide 1 when no role is set). Absent → those slides share `background`.
+     */
+    coverBackground: MasterBackgroundSchema.optional(),
     objects: z.array(MasterObjectSchema).max(32).optional(),
   })
   .refine(
-    (m) => m.background !== undefined || (m.objects?.length ?? 0) > 0,
-    { message: 'master must define at least one of background or objects.' },
+    (m) =>
+      m.background !== undefined || m.coverBackground !== undefined || (m.objects?.length ?? 0) > 0,
+    { message: 'master must define at least one of background, coverBackground, or objects.' },
   );
 export type Master = z.infer<typeof MasterSchema>;
 
