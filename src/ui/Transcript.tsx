@@ -21,6 +21,9 @@ export const Transcript: React.FC<Props> = ({ entries }) => {
                 {e.images?.length ? (
                   <Text color="yellow">🖼 {e.images.map((p) => basename(p)).join(', ')}</Text>
                 ) : null}
+                {e.documents?.length ? (
+                  <Text color="blue">📄 {e.documents.map((p) => basename(p)).join(', ')}</Text>
+                ) : null}
               </Box>
             );
           case 'assistant':

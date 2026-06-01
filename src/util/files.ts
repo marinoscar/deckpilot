@@ -6,8 +6,8 @@ export type FileEntry = {
   path: string;
   /** Display label — usually just the basename. */
   name: string;
-  /** `.pptx` (template / saved deck), `.plan.json` (saved plan), `.pdf`, image, etc. */
-  kind: 'pptx' | 'plan.json' | 'json' | 'image' | 'other';
+  /** `.pptx` (template / saved deck), `.plan.json` (saved plan), `.pdf`, image, document, etc. */
+  kind: 'pptx' | 'plan.json' | 'json' | 'image' | 'document' | 'other';
   /** Last-modified epoch ms, for sorting. */
   mtime: number;
   /** Size in bytes. */
@@ -17,13 +17,17 @@ export type FileEntry = {
 const INTERESTING = /\.(pptx|plan\.json|json|pdf)$/i;
 /** Image formats the LLM can understand (used by the `/image` picker). */
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+/** Document formats whose text can be extracted (used by the `/doc` picker). */
+export const DOCUMENT_EXT = /\.(txt|md|markdown|pptx|docx)$/i;
 
 /** Which file set the workspace scan surfaces. */
-export type ScanKinds = 'default' | 'images';
+export type ScanKinds = 'default' | 'images' | 'documents';
 
 /** Max reference images stageable per turn, and max bytes per image. */
 export const MAX_ATTACHED_IMAGES = 8;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Max reference documents stageable per turn. */
+export const MAX_ATTACHED_DOCUMENTS = 8;
 
 /**
  * Map an image filename to the MIME type DeckPilot sends to the model, or
@@ -48,29 +52,35 @@ export function extToMime(name: string): string | null {
 }
 
 /**
- * Toggle `path` in a staged-image list: add when absent (capped at
- * `MAX_ATTACHED_IMAGES`), remove when present. Pure + deduped so the
- * multi-select picker logic is unit-testable without ink.
+ * Toggle `path` in a staged list: add when absent (capped at `max`), remove
+ * when present. Pure + deduped so the multi-select picker logic is
+ * unit-testable without ink. Shared by the image and document pickers.
  */
-export function toggleImage(list: string[], path: string): string[] {
+export function toggleImage(list: string[], path: string, max = MAX_ATTACHED_IMAGES): string[] {
   if (list.includes(path)) return list.filter((p) => p !== path);
-  if (list.length >= MAX_ATTACHED_IMAGES) return list;
+  if (list.length >= max) return list;
   return [...list, path];
 }
 
 /**
- * Add `paths` to `list` (deduped, order-preserving, capped at
- * `MAX_ATTACHED_IMAGES`). Add-only — used when committing a picker selection
- * into the staged set, unlike `toggleImage`.
+ * Add `paths` to `list` (deduped, order-preserving, capped at `max`). Add-only
+ * — used when committing a picker selection into the staged set, unlike
+ * `toggleImage`.
  */
-export function mergeImages(list: string[], paths: string[]): string[] {
+export function mergeImages(list: string[], paths: string[], max = MAX_ATTACHED_IMAGES): string[] {
   const out = [...list];
   for (const p of paths) {
-    if (out.length >= MAX_ATTACHED_IMAGES) break;
+    if (out.length >= max) break;
     if (!out.includes(p)) out.push(p);
   }
   return out;
 }
+
+/** Document-picker aliases for the staged-list helpers (capped at the doc max). */
+export const toggleDocument = (list: string[], path: string): string[] =>
+  toggleImage(list, path, MAX_ATTACHED_DOCUMENTS);
+export const mergeDocuments = (list: string[], paths: string[]): string[] =>
+  mergeImages(list, paths, MAX_ATTACHED_DOCUMENTS);
 
 /**
  * Scan a directory (default: cwd) for files the `@` picker should surface. We
@@ -84,7 +94,8 @@ export async function scanWorkspaceFiles(
 ): Promise<FileEntry[]> {
   const max = opts.max ?? 200;
   const out: FileEntry[] = [];
-  const match = opts.kinds === 'images' ? IMAGE_EXT : INTERESTING;
+  const match =
+    opts.kinds === 'images' ? IMAGE_EXT : opts.kinds === 'documents' ? DOCUMENT_EXT : INTERESTING;
   await walk(dir, dir, out, max, opts.recursive ?? false, match);
   out.sort((a, b) => b.mtime - a.mtime);
   return out.slice(0, max);
@@ -138,6 +149,7 @@ function classify(name: string): FileEntry['kind'] {
   if (/\.plan\.json$/i.test(name)) return 'plan.json';
   if (/\.json$/i.test(name)) return 'json';
   if (IMAGE_EXT.test(name)) return 'image';
+  if (DOCUMENT_EXT.test(name)) return 'document';
   return 'other';
 }
 

@@ -61,8 +61,21 @@ export async function buildImageAttachments(imagePaths: string[]): Promise<Built
   return { attachments, attachedPaths, skipped };
 }
 
-/** The prompt actually sent: the user's text, or a default when only images. */
+/** Default prompts used when the user attaches files but types no message. */
 export const DEFAULT_IMAGE_PROMPT = 'Use the attached reference image(s) to inform the deck.';
-export function effectivePrompt(text: string): string {
-  return text.trim().length > 0 ? text : DEFAULT_IMAGE_PROMPT;
+export const DEFAULT_DOCUMENT_PROMPT = 'Use the attached reference document(s) to inform the deck.';
+
+/**
+ * The prompt actually sent: the user's typed text when present, otherwise a
+ * default tailored to what was attached (documents take precedence over images
+ * since their text is the substance of the turn).
+ */
+export function effectivePrompt(
+  text: string,
+  opts: { hasImages?: boolean; hasDocs?: boolean } = {},
+): string {
+  if (text.trim().length > 0) return text;
+  if (opts.hasDocs) return DEFAULT_DOCUMENT_PROMPT;
+  if (opts.hasImages) return DEFAULT_IMAGE_PROMPT;
+  return DEFAULT_IMAGE_PROMPT;
 }

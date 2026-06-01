@@ -272,6 +272,22 @@ copied into `~/.deckpilot/projects/<slug>/images/` and recorded in the
 transcript, so a resumed session still shows them. `Esc` on an empty prompt
 line clears the staged set.
 
+#### In-chat: attaching document context (`/doc`)
+
+Type `/doc` (or `/docs`) to open a multi-select picker of **document** files in
+the working folder — **`.txt`, `.md`, `.pptx`, `.docx`** (e.g. a Statement of
+Work or a reference deck). Same keys as `/image` (`↑`/`↓`, `Space`, `Enter`,
+`Esc`). Unlike images, documents are not sent as vision: their **text is
+extracted** — slide text + speaker notes for `.pptx`, paragraphs + tables for
+`.docx` — and **injected as reference context** appended to your next message,
+where it stays in the conversation for the rest of the session. The chat shows
+your typed text plus a 📄 list of the attached file names (not the raw text).
+Staged docs appear in a 📄 tray above the prompt (alongside any staged images);
+a single message can carry both. Size caps: ~60k characters per document,
+~150k total — longer documents are truncated with a note. Attached documents
+are copied into `~/.deckpilot/projects/<slug>/context/` and recorded in the
+transcript. `Esc` on an empty prompt line clears the staged set.
+
 ---
 
 ### `deckpilot skill list | show | create | edit | delete`

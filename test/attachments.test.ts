@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_DOCUMENT_PROMPT,
   DEFAULT_IMAGE_PROMPT,
   buildImageAttachments,
   effectivePrompt,
@@ -74,11 +75,18 @@ describe('buildImageAttachments', () => {
 
 describe('effectivePrompt', () => {
   it('returns the user text when present', () => {
-    expect(effectivePrompt('match this style')).toBe('match this style');
+    expect(effectivePrompt('match this style', { hasDocs: true })).toBe('match this style');
   });
 
-  it('synthesizes a default prompt for empty/whitespace text', () => {
+  it('uses the document default when only documents are attached', () => {
+    expect(effectivePrompt('', { hasDocs: true })).toBe(DEFAULT_DOCUMENT_PROMPT);
+    expect(effectivePrompt('   ', { hasDocs: true, hasImages: true })).toBe(
+      DEFAULT_DOCUMENT_PROMPT,
+    );
+  });
+
+  it('uses the image default when only images are attached or nothing is', () => {
+    expect(effectivePrompt('', { hasImages: true })).toBe(DEFAULT_IMAGE_PROMPT);
     expect(effectivePrompt('')).toBe(DEFAULT_IMAGE_PROMPT);
-    expect(effectivePrompt('   ')).toBe(DEFAULT_IMAGE_PROMPT);
   });
 });

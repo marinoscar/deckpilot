@@ -101,6 +101,8 @@ Slash commands:
   /style-guide        Show the active DECKPILOT.md (or note that none was found)
   /image, /img        Pick image files from this folder to attach to your next
                       message as visual references the model can see (multi-select)
+  /doc, /docs         Pick document files (.txt/.md/.pptx/.docx) from this folder
+                      to attach as text context for your next message (multi-select)
   /undo               Roll back the most recent deck change
   /clear              Clear the transcript (keep the deck)
   /new                Clear the transcript and decouple from the current project
@@ -119,6 +121,9 @@ current directory (handy for /template, /load, or referencing files in chat).
 Type "/image" to attach image files (png/jpg/gif/webp) from this folder as
 visual references the model can actually see — they're sent with your next
 message. Staged images show above the prompt; Esc on an empty line clears them.
+Type "/doc" to attach document files (.txt/.md/.pptx/.docx) — their text is
+extracted and injected as reference context with your next message, and stays
+in the conversation for the rest of the session.
 
 Anything not starting with / is sent to GitHub Copilot.
 `.trim();

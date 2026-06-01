@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 import { Box, Text, useInput } from 'ink';
 import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
-import { type FileEntry, toggleImage } from '../util/files.js';
+import { type FileEntry, toggleDocument, toggleImage } from '../util/files.js';
 import { FilePicker } from './FilePicker.js';
 
 type Props = {
@@ -14,13 +14,19 @@ type Props = {
   onCommitImages?: (paths: string[]) => void;
   /** Clear all staged images. */
   onClearImages?: () => void;
+  /** Documents staged for the next message (owned by App, shown in the tray). */
+  pendingDocuments?: string[];
+  /** Called when the `/doc` picker is confirmed, with the chosen paths. */
+  onCommitDocuments?: (paths: string[]) => void;
+  /** Clear all staged documents. */
+  onClearDocuments?: () => void;
 };
 
 type PickerState = {
   start: number;
   query: string;
   index: number;
-  mode: 'default' | 'image';
+  mode: 'default' | 'image' | 'document';
 };
 
 /**
@@ -41,6 +47,9 @@ export const Prompt: React.FC<Props> = ({
   pendingImages = [],
   onCommitImages,
   onClearImages,
+  pendingDocuments = [],
+  onCommitDocuments,
+  onClearDocuments,
 }) => {
   const [value, setValue] = useState('');
   const [picker, setPicker] = useState<PickerState | null>(null);
@@ -77,15 +86,17 @@ export const Prompt: React.FC<Props> = ({
 
     // ---- picker is open ----
     if (picker) {
-      // Multi-select image picker.
-      if (picker.mode === 'image') {
+      // Multi-select image / document picker (shared logic).
+      if (picker.mode === 'image' || picker.mode === 'document') {
+        const isDoc = picker.mode === 'document';
         if (key.escape) {
           setSelected([]);
           setPicker(null);
           return;
         }
         if (key.return) {
-          onCommitImages?.(selected);
+          if (isDoc) onCommitDocuments?.(selected);
+          else onCommitImages?.(selected);
           setSelected([]);
           setPicker(null);
           return;
@@ -101,7 +112,8 @@ export const Prompt: React.FC<Props> = ({
         }
         if (input === ' ') {
           const choice = filteredRef.current[picker.index];
-          if (choice) setSelected((s) => toggleImage(s, choice.path));
+          const toggle = isDoc ? toggleDocument : toggleImage;
+          if (choice) setSelected((s) => toggle(s, choice.path));
           return;
         }
         if (key.backspace || key.delete) {
@@ -173,15 +185,26 @@ export const Prompt: React.FC<Props> = ({
         setPicker({ start: 0, query: '', index: 0, mode: 'image' });
         return;
       }
+      // `/doc` (or `/docs`) opens the multi-select document picker — extracted
+      // text is attached to the next message, not sent now.
+      if (text === '/doc' || text === '/docs') {
+        setValue('');
+        setSelected([]);
+        setPicker({ start: 0, query: '', index: 0, mode: 'document' });
+        return;
+      }
       if (text.length > 0) {
         setValue('');
         onSubmit(text);
       }
       return;
     }
-    // Esc with an empty buffer clears any staged images.
+    // Esc with an empty buffer clears any staged attachments.
     if (key.escape) {
-      if (value.length === 0 && pendingImages.length > 0) onClearImages?.();
+      if (value.length === 0) {
+        if (pendingImages.length > 0) onClearImages?.();
+        if (pendingDocuments.length > 0) onClearDocuments?.();
+      }
       return;
     }
     if (key.backspace || key.delete) {
@@ -202,10 +225,17 @@ export const Prompt: React.FC<Props> = ({
   return (
     <Box flexDirection="column">
       {pendingImages.length > 0 ? (
-        <Box marginBottom={picker ? 0 : 1}>
+        <Box marginBottom={picker || pendingDocuments.length ? 0 : 1}>
           <Text color="yellow">🖼 attached: </Text>
           <Text>{pendingImages.map((p) => basename(p)).join(', ')}</Text>
           <Text dimColor> ({pendingImages.length}) · /image to add · Esc to clear</Text>
+        </Box>
+      ) : null}
+      {pendingDocuments.length > 0 ? (
+        <Box marginBottom={picker ? 0 : 1}>
+          <Text color="blue">📄 context: </Text>
+          <Text>{pendingDocuments.map((p) => basename(p)).join(', ')}</Text>
+          <Text dimColor> ({pendingDocuments.length}) · /doc to add · Esc to clear</Text>
         </Box>
       ) : null}
       {picker ? (
@@ -214,7 +244,9 @@ export const Prompt: React.FC<Props> = ({
           selectedIndex={picker.index}
           onResolve={handlePickerResolve}
           mode={picker.mode}
-          selected={picker.mode === 'image' ? new Set(selected) : undefined}
+          selected={
+            picker.mode === 'image' || picker.mode === 'document' ? new Set(selected) : undefined
+          }
         />
       ) : null}
       <Box>

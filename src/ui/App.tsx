@@ -9,7 +9,7 @@ import { renderDeck } from '../render/renderer.js';
 import { listTemplates } from '../store/templates.js';
 import { summarizeTemplate as summarizeTemplateProfile } from '../template/profile.js';
 import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
-import { mergeImages } from '../util/files.js';
+import { mergeDocuments, mergeImages } from '../util/files.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
@@ -35,6 +35,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
   );
   const [saveState, setSaveState] = useState<SaveState | null>(session.getSaveState());
   const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [pendingDocuments, setPendingDocuments] = useState<string[]>([]);
   const lastCtrlC = useRef<number>(0);
 
   useEffect(() => session.subscribe(setEntries), [session]);
@@ -87,9 +88,11 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
       return;
     }
     const images = pendingImages;
+    const documents = pendingDocuments;
     setPendingImages([]);
+    setPendingDocuments([]);
     try {
-      await session.sendUserMessage(text, images);
+      await session.sendUserMessage(text, images, documents);
     } catch (e) {
       setStatus('error');
       session.addSystemMessage(`error: ${(e as Error).message}`);
@@ -360,6 +363,9 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
             pendingImages={pendingImages}
             onCommitImages={(paths) => setPendingImages((cur) => mergeImages(cur, paths))}
             onClearImages={() => setPendingImages([])}
+            pendingDocuments={pendingDocuments}
+            onCommitDocuments={(paths) => setPendingDocuments((cur) => mergeDocuments(cur, paths))}
+            onClearDocuments={() => setPendingDocuments([])}
           />
         )}
         <StatusBar

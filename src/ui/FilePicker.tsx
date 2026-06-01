@@ -7,9 +7,9 @@ type Props = {
   query: string;
   selectedIndex: number;
   onResolve: (filtered: FileEntry[]) => void;
-  /** 'default' = the `@` picker (pptx/json/pdf); 'image' = the `/image` picker. */
-  mode?: 'default' | 'image';
-  /** In image mode, the set of already-staged paths (renders [x] markers). */
+  /** 'default' = `@` picker; 'image' = `/image`; 'document' = `/doc`. */
+  mode?: 'default' | 'image' | 'document';
+  /** In a multi-select mode, the set of already-staged paths (renders [x] markers). */
   selected?: Set<string>;
 };
 
@@ -18,6 +18,7 @@ const KIND_LABEL: Record<FileEntry['kind'], string> = {
   'plan.json': 'plan',
   json: 'json',
   image: 'img',
+  document: 'doc',
   other: 'file',
 };
 
@@ -26,6 +27,7 @@ const KIND_COLOR: Record<FileEntry['kind'], string> = {
   'plan.json': 'green',
   json: 'cyan',
   image: 'yellow',
+  document: 'blue',
   other: 'gray',
 };
 
@@ -44,14 +46,15 @@ export const FilePicker: React.FC<Props> = ({
 }) => {
   const [all, setAll] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const isImage = mode === 'image';
-  const lead = isImage ? '🖼' : '@';
-  const accent = isImage ? 'yellow' : 'cyan';
+  const multi = mode === 'image' || mode === 'document';
+  const lead = mode === 'image' ? '🖼' : mode === 'document' ? '📄' : '@';
+  const accent = mode === 'image' ? 'yellow' : mode === 'document' ? 'blue' : 'cyan';
+  const scanKind = mode === 'image' ? 'images' : mode === 'document' ? 'documents' : 'default';
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const files = await scanWorkspaceFiles(undefined, { kinds: isImage ? 'images' : 'default' });
+      const files = await scanWorkspaceFiles(undefined, { kinds: scanKind });
       if (cancelled) return;
       setAll(files);
       setLoading(false);
@@ -59,7 +62,7 @@ export const FilePicker: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [isImage]);
+  }, [scanKind]);
 
   const filtered = filterFiles(all, query);
 
@@ -77,11 +80,16 @@ export const FilePicker: React.FC<Props> = ({
   }
 
   if (filtered.length === 0) {
+    const noun =
+      mode === 'image'
+        ? 'image files (png/jpg/gif/webp)'
+        : mode === 'document'
+          ? 'document files (txt/md/pptx/docx)'
+          : '.pptx or .plan.json files';
     return (
       <Box marginBottom={1}>
         <Text color="yellow">
-          {lead} no matching {isImage ? 'image files (png/jpg/gif/webp)' : '.pptx or .plan.json'}{' '}
-          files in {process.cwd()} (query: {query || '∅'})
+          {lead} no matching {noun} in {process.cwd()} (query: {query || '∅'})
         </Text>
       </Box>
     );
@@ -100,20 +108,20 @@ export const FilePicker: React.FC<Props> = ({
       paddingX={1}
     >
       <Text color={accent} bold>
-        {lead} {filtered.length} {isImage ? 'image' : 'file'}
+        {lead} {filtered.length} {mode === 'image' ? 'image' : mode === 'document' ? 'doc' : 'file'}
         {filtered.length === 1 ? '' : 's'}
-        {isImage
+        {multi
           ? ` · ${selected?.size ?? 0} selected (↑/↓ · Space toggle · Enter done · Esc cancel)`
           : ' (↑/↓ select · Enter insert · Esc cancel)'}
       </Text>
       {visible.map((f, i) => {
         const realIndex = start + i;
         const sel = realIndex === selectedIndex;
-        const checked = isImage && selected?.has(f.path);
+        const checked = multi && selected?.has(f.path);
         return (
           <Box key={f.path}>
             <Text color={sel ? `${accent}Bright` : 'gray'}>{sel ? '› ' : '  '}</Text>
-            {isImage ? (
+            {multi ? (
               <Text color={checked ? 'green' : 'gray'}>{checked ? '[x] ' : '[ ] '}</Text>
             ) : null}
             <Text color={sel ? 'white' : KIND_COLOR[f.kind]} bold={sel}>

@@ -39,6 +39,7 @@ import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js'
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
 import { buildImageAttachments, effectivePrompt } from './attachments.js';
+import { buildContextBlock } from './document-context.js';
 import type { TranscriptEntry } from './session-types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 export type { TranscriptEntry };
@@ -741,7 +742,11 @@ export class ChatSession {
     this.push({ kind: 'system', id: this.id(), text });
   }
 
-  async sendUserMessage(text: string, imagePaths: string[] = []): Promise<void> {
+  async sendUserMessage(
+    text: string,
+    imagePaths: string[] = [],
+    documentPaths: string[] = [],
+  ): Promise<void> {
     if (!this.session) throw new Error('Session not started');
 
     // Build multimodal blob attachments from staged reference images. The
@@ -749,9 +754,32 @@ export class ChatSession {
     const { attachments, attachedPaths, skipped } = await buildImageAttachments(imagePaths);
     for (const s of skipped) this.addSystemMessage(`Skipped ${basename(s.path)} — ${s.reason}.`);
 
-    // Copy the attached images into the project so a resumed session shows them.
-    const stored = attachedPaths.length ? await this.recordAttachedImages(attachedPaths) : [];
-    this.push({ kind: 'user', id: this.id(), text, ...(stored.length ? { images: stored } : {}) });
+    // Extract text from staged reference documents and assemble a context block
+    // appended to the SENT prompt only (kept out of the visible transcript).
+    const ctx = await buildContextBlock(documentPaths);
+    for (const s of ctx.skipped)
+      this.addSystemMessage(`Skipped ${basename(s.path)} — ${s.reason}.`);
+    if (ctx.truncated) {
+      this.addSystemMessage('Some attached documents were truncated to fit the context budget.');
+    }
+
+    // Copy attached files into the project so a resumed session shows them.
+    const storedImages = attachedPaths.length
+      ? await this.recordAttachedFiles(attachedPaths, 'images')
+      : [];
+    const storedDocs = ctx.attached.length
+      ? await this.recordAttachedFiles(
+          ctx.attached.map((a) => a.path),
+          'context',
+        )
+      : [];
+    this.push({
+      kind: 'user',
+      id: this.id(),
+      text,
+      ...(storedImages.length ? { images: storedImages } : {}),
+      ...(storedDocs.length ? { documents: storedDocs } : {}),
+    });
 
     // Persist the SDK session id on first user turn — we need it for resume.
     if (this.project && !this.project.manifest.sessionId && this.session.sessionId) {
@@ -765,7 +793,11 @@ export class ChatSession {
       // Mirrors the proven tool-result {data,mimeType,type:'image'} shape. If a
       // real run shows the model only sees filenames, fall back to a
       // view_reference_images tool returning binaryResultsForLlm.
-      const prompt = effectivePrompt(text);
+      const base = effectivePrompt(text, {
+        hasImages: attachments.length > 0,
+        hasDocs: ctx.block.length > 0,
+      });
+      const prompt = ctx.block ? `${base}\n\n${ctx.block}` : base;
       await this.session.send(attachments.length ? { prompt, attachments } : { prompt });
     } catch (e) {
       this.setBusy(false);
@@ -774,20 +806,20 @@ export class ChatSession {
   }
 
   /**
-   * Copy staged reference images into the project's `images/` directory (or a
+   * Copy staged reference files into the project's `<subdir>/` directory (or a
    * tmpdir when ephemeral) so a resumed session can show what was attached.
    * Best-effort: on copy failure the source path is kept. Returns the stored
-   * paths in input order.
+   * paths in input order. Used for both `images` and `context` documents.
    */
-  async recordAttachedImages(paths: string[]): Promise<string[]> {
+  async recordAttachedFiles(paths: string[], subdir: 'images' | 'context'): Promise<string[]> {
     if (paths.length === 0) return [];
     const baseDir = this.project
-      ? resolve(this.project.rootDir, 'images')
-      : resolve(tmpdir(), 'deckpilot-image-attachments');
+      ? resolve(this.project.rootDir, subdir)
+      : resolve(tmpdir(), `deckpilot-${subdir}-attachments`);
     try {
       await mkdir(baseDir, { recursive: true });
     } catch (e) {
-      log.warn('recordAttachedImages mkdir failed:', (e as Error).message);
+      log.warn('recordAttachedFiles mkdir failed:', (e as Error).message);
       return paths;
     }
     const stored: string[] = [];
@@ -797,7 +829,7 @@ export class ChatSession {
         await writeFile(dest, await readFile(p));
         stored.push(dest);
       } catch (e) {
-        log.warn('recordAttachedImages copy failed:', (e as Error).message);
+        log.warn('recordAttachedFiles copy failed:', (e as Error).message);
         stored.push(p);
       }
     }
