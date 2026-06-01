@@ -6,8 +6,8 @@ export type FileEntry = {
   path: string;
   /** Display label — usually just the basename. */
   name: string;
-  /** `.pptx` (template / saved deck), `.plan.json` (saved plan), `.pdf` / etc. */
-  kind: 'pptx' | 'plan.json' | 'json' | 'other';
+  /** `.pptx` (template / saved deck), `.plan.json` (saved plan), `.pdf`, image, etc. */
+  kind: 'pptx' | 'plan.json' | 'json' | 'image' | 'other';
   /** Last-modified epoch ms, for sorting. */
   mtime: number;
   /** Size in bytes. */
@@ -15,6 +15,62 @@ export type FileEntry = {
 };
 
 const INTERESTING = /\.(pptx|plan\.json|json|pdf)$/i;
+/** Image formats the LLM can understand (used by the `/image` picker). */
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+
+/** Which file set the workspace scan surfaces. */
+export type ScanKinds = 'default' | 'images';
+
+/** Max reference images stageable per turn, and max bytes per image. */
+export const MAX_ATTACHED_IMAGES = 8;
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Map an image filename to the MIME type DeckPilot sends to the model, or
+ * null when the extension isn't a supported image. Single source of truth for
+ * both the `/image` picker filter and the base64 attachment encoder.
+ */
+export function extToMime(name: string): string | null {
+  const ext = name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  switch (ext) {
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Toggle `path` in a staged-image list: add when absent (capped at
+ * `MAX_ATTACHED_IMAGES`), remove when present. Pure + deduped so the
+ * multi-select picker logic is unit-testable without ink.
+ */
+export function toggleImage(list: string[], path: string): string[] {
+  if (list.includes(path)) return list.filter((p) => p !== path);
+  if (list.length >= MAX_ATTACHED_IMAGES) return list;
+  return [...list, path];
+}
+
+/**
+ * Add `paths` to `list` (deduped, order-preserving, capped at
+ * `MAX_ATTACHED_IMAGES`). Add-only — used when committing a picker selection
+ * into the staged set, unlike `toggleImage`.
+ */
+export function mergeImages(list: string[], paths: string[]): string[] {
+  const out = [...list];
+  for (const p of paths) {
+    if (out.length >= MAX_ATTACHED_IMAGES) break;
+    if (!out.includes(p)) out.push(p);
+  }
+  return out;
+}
 
 /**
  * Scan a directory (default: cwd) for files the `@` picker should surface. We
@@ -24,11 +80,12 @@ const INTERESTING = /\.(pptx|plan\.json|json|pdf)$/i;
  */
 export async function scanWorkspaceFiles(
   dir: string = process.cwd(),
-  opts: { recursive?: boolean; max?: number } = {},
+  opts: { recursive?: boolean; max?: number; kinds?: ScanKinds } = {},
 ): Promise<FileEntry[]> {
   const max = opts.max ?? 200;
   const out: FileEntry[] = [];
-  await walk(dir, dir, out, max, opts.recursive ?? false);
+  const match = opts.kinds === 'images' ? IMAGE_EXT : INTERESTING;
+  await walk(dir, dir, out, max, opts.recursive ?? false, match);
   out.sort((a, b) => b.mtime - a.mtime);
   return out.slice(0, max);
 }
@@ -39,6 +96,7 @@ async function walk(
   out: FileEntry[],
   max: number,
   recursive: boolean,
+  match: RegExp,
 ): Promise<void> {
   if (out.length >= max) return;
   let entries;
@@ -53,10 +111,10 @@ async function walk(
     if (e.name === 'node_modules' || e.name === 'dist' || e.name === 'build') continue;
     const full = join(cur, e.name);
     if (e.isDirectory()) {
-      if (recursive) await walk(root, full, out, max, recursive);
+      if (recursive) await walk(root, full, out, max, recursive, match);
       continue;
     }
-    if (!INTERESTING.test(e.name)) continue;
+    if (!match.test(e.name)) continue;
     try {
       const st = await stat(full);
       // path.sep — `/` on Linux/macOS, `\` on Windows. Hard-coding `/` here
@@ -79,6 +137,7 @@ function classify(name: string): FileEntry['kind'] {
   if (/\.pptx$/i.test(name)) return 'pptx';
   if (/\.plan\.json$/i.test(name)) return 'plan.json';
   if (/\.json$/i.test(name)) return 'json';
+  if (IMAGE_EXT.test(name)) return 'image';
   return 'other';
 }
 

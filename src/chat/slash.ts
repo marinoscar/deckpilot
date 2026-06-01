@@ -99,6 +99,8 @@ Slash commands:
   /critique <id>      Force the LLM to re-preview a specific slide (resets its budget)
   /critique-passes <n>  Set how many preview passes per slide (0 disables, max 5)
   /style-guide        Show the active DECKPILOT.md (or note that none was found)
+  /image, /img        Pick image files from this folder to attach to your next
+                      message as visual references the model can see (multi-select)
   /undo               Roll back the most recent deck change
   /clear              Clear the transcript (keep the deck)
   /new                Clear the transcript and decouple from the current project
@@ -114,6 +116,9 @@ and settings.
 
 Type "@" in the prompt to insert a path to a .pptx or .brief.json in the
 current directory (handy for /template, /load, or referencing files in chat).
+Type "/image" to attach image files (png/jpg/gif/webp) from this folder as
+visual references the model can actually see — they're sent with your next
+message. Staged images show above the prompt; Esc on an empty line clears them.
 
 Anything not starting with / is sent to GitHub Copilot.
 `.trim();

@@ -7,12 +7,17 @@ type Props = {
   query: string;
   selectedIndex: number;
   onResolve: (filtered: FileEntry[]) => void;
+  /** 'default' = the `@` picker (pptx/json/pdf); 'image' = the `/image` picker. */
+  mode?: 'default' | 'image';
+  /** In image mode, the set of already-staged paths (renders [x] markers). */
+  selected?: Set<string>;
 };
 
 const KIND_LABEL: Record<FileEntry['kind'], string> = {
   pptx: 'pptx',
   'plan.json': 'plan',
   json: 'json',
+  image: 'img',
   other: 'file',
 };
 
@@ -20,6 +25,7 @@ const KIND_COLOR: Record<FileEntry['kind'], string> = {
   pptx: 'magenta',
   'plan.json': 'green',
   json: 'cyan',
+  image: 'yellow',
   other: 'gray',
 };
 
@@ -29,14 +35,23 @@ const MAX_VISIBLE = 8;
  * Popup-style file list. Stateless about input — App routes keypresses to it.
  * Loads cwd once on mount, then filters client-side as `query` changes.
  */
-export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve }) => {
+export const FilePicker: React.FC<Props> = ({
+  query,
+  selectedIndex,
+  onResolve,
+  mode = 'default',
+  selected,
+}) => {
   const [all, setAll] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const isImage = mode === 'image';
+  const lead = isImage ? '🖼' : '@';
+  const accent = isImage ? 'yellow' : 'cyan';
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const files = await scanWorkspaceFiles();
+      const files = await scanWorkspaceFiles(undefined, { kinds: isImage ? 'images' : 'default' });
       if (cancelled) return;
       setAll(files);
       setLoading(false);
@@ -44,7 +59,7 @@ export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve })
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isImage]);
 
   const filtered = filterFiles(all, query);
 
@@ -56,7 +71,7 @@ export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve })
   if (loading) {
     return (
       <Box marginBottom={1}>
-        <Text dimColor>@ scanning workspace …</Text>
+        <Text dimColor>{lead} scanning workspace …</Text>
       </Box>
     );
   }
@@ -65,7 +80,8 @@ export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve })
     return (
       <Box marginBottom={1}>
         <Text color="yellow">
-          @ no matching .pptx or .plan.json files in {process.cwd()} (query: {query || '∅'})
+          {lead} no matching {isImage ? 'image files (png/jpg/gif/webp)' : '.pptx or .plan.json'}{' '}
+          files in {process.cwd()} (query: {query || '∅'})
         </Text>
       </Box>
     );
@@ -80,19 +96,26 @@ export const FilePicker: React.FC<Props> = ({ query, selectedIndex, onResolve })
       flexDirection="column"
       marginBottom={1}
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={accent}
       paddingX={1}
     >
-      <Text color="cyan" bold>
-        @ {filtered.length} file{filtered.length === 1 ? '' : 's'} (↑/↓ select · Enter insert · Esc
-        cancel)
+      <Text color={accent} bold>
+        {lead} {filtered.length} {isImage ? 'image' : 'file'}
+        {filtered.length === 1 ? '' : 's'}
+        {isImage
+          ? ` · ${selected?.size ?? 0} selected (↑/↓ · Space toggle · Enter done · Esc cancel)`
+          : ' (↑/↓ select · Enter insert · Esc cancel)'}
       </Text>
       {visible.map((f, i) => {
         const realIndex = start + i;
         const sel = realIndex === selectedIndex;
+        const checked = isImage && selected?.has(f.path);
         return (
           <Box key={f.path}>
-            <Text color={sel ? 'cyanBright' : 'gray'}>{sel ? '› ' : '  '}</Text>
+            <Text color={sel ? `${accent}Bright` : 'gray'}>{sel ? '› ' : '  '}</Text>
+            {isImage ? (
+              <Text color={checked ? 'green' : 'gray'}>{checked ? '[x] ' : '[ ] '}</Text>
+            ) : null}
             <Text color={sel ? 'white' : KIND_COLOR[f.kind]} bold={sel}>
               [{KIND_LABEL[f.kind]}]
             </Text>

@@ -1,33 +1,54 @@
+import { basename } from 'node:path';
 import { Box, Text, useInput } from 'ink';
 import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
-import type { FileEntry } from '../util/files.js';
+import { type FileEntry, toggleImage } from '../util/files.js';
 import { FilePicker } from './FilePicker.js';
 
 type Props = {
   disabled: boolean;
   onSubmit: (text: string) => void;
+  /** Images staged for the next message (owned by App, shown in the tray). */
+  pendingImages?: string[];
+  /** Called when the `/image` picker is confirmed, with the chosen paths. */
+  onCommitImages?: (paths: string[]) => void;
+  /** Clear all staged images. */
+  onClearImages?: () => void;
+};
+
+type PickerState = {
+  start: number;
+  query: string;
+  index: number;
+  mode: 'default' | 'image';
 };
 
 /**
- * Text input + integrated `@` file picker. Behaviour:
+ * Text input + integrated pickers. Behaviour:
  *   - Plain typing accumulates into the buffer.
- *   - Typing `@` (after whitespace or at the start) opens the picker.
- *   - While the picker is open, characters typed extend the query; ↑/↓ move
- *     the selection; Enter inserts the chosen path; Esc dismisses.
- *   - Backspace inside the query trims the query; backspacing through `@`
- *     closes the picker.
- *   - The user can keep typing after the picker closes — the buffer is
+ *   - Typing `@` (after whitespace or at the start) opens the file picker;
+ *     Enter inserts the chosen path into the buffer (single-select).
+ *   - Submitting `/image` (or `/img`) opens a multi-select image picker:
+ *     Space toggles, Enter confirms (stages the images for the next message),
+ *     Esc cancels. Staged images show in a tray above the prompt and are sent
+ *     with the next message.
+ *   - The user can keep typing after a picker closes — the buffer is
  *     uninterrupted.
  */
-export const Prompt: React.FC<Props> = ({ disabled, onSubmit }) => {
+export const Prompt: React.FC<Props> = ({
+  disabled,
+  onSubmit,
+  pendingImages = [],
+  onCommitImages,
+  onClearImages,
+}) => {
   const [value, setValue] = useState('');
-  const [picker, setPicker] = useState<{ start: number; query: string; index: number } | null>(
-    null,
-  );
+  const [picker, setPicker] = useState<PickerState | null>(null);
+  // Paths toggled within the current image-picker session (committed on Enter).
+  const [selected, setSelected] = useState<string[]>([]);
   const filteredRef = useRef<FileEntry[]>([]);
 
-  // Track latest filtered list from the picker so Enter knows what to insert.
+  // Track latest filtered list from the picker so Enter/Space knows the target.
   const handlePickerResolve = useCallback((files: FileEntry[]) => {
     filteredRef.current = files;
     // Clamp selected index if it scrolled off the end of the new filtered list.
@@ -46,8 +67,6 @@ export const Prompt: React.FC<Props> = ({ disabled, onSubmit }) => {
 
   function insertPath(path: string) {
     if (!picker) return;
-    // Replace [picker.start ... end] with the path. (We treat the picker as
-    // anchored to the trailing slice — opens at "@" and runs to end of buf.)
     const before = value.slice(0, picker.start);
     setValue(`${before}${path} `);
     setPicker(null);
@@ -58,8 +77,51 @@ export const Prompt: React.FC<Props> = ({ disabled, onSubmit }) => {
 
     // ---- picker is open ----
     if (picker) {
+      // Multi-select image picker.
+      if (picker.mode === 'image') {
+        if (key.escape) {
+          setSelected([]);
+          setPicker(null);
+          return;
+        }
+        if (key.return) {
+          onCommitImages?.(selected);
+          setSelected([]);
+          setPicker(null);
+          return;
+        }
+        if (key.upArrow) {
+          setPicker((p) => (p ? { ...p, index: Math.max(0, p.index - 1) } : p));
+          return;
+        }
+        if (key.downArrow) {
+          const max = Math.max(0, filteredRef.current.length - 1);
+          setPicker((p) => (p ? { ...p, index: Math.min(max, p.index + 1) } : p));
+          return;
+        }
+        if (input === ' ') {
+          const choice = filteredRef.current[picker.index];
+          if (choice) setSelected((s) => toggleImage(s, choice.path));
+          return;
+        }
+        if (key.backspace || key.delete) {
+          if (picker.query.length === 0) {
+            setSelected([]);
+            setPicker(null);
+            return;
+          }
+          setPicker({ ...picker, query: picker.query.slice(0, -1), index: 0 });
+          return;
+        }
+        if (input && !key.ctrl && !key.meta && !key.tab && !key.leftArrow && !key.rightArrow) {
+          setPicker({ ...picker, query: picker.query + input, index: 0 });
+          return;
+        }
+        return;
+      }
+
+      // Single-select `@` file picker.
       if (key.escape) {
-        // Drop just the `@<query>` and close.
         setValue(value.slice(0, picker.start));
         setPicker(null);
         return;
@@ -84,7 +146,6 @@ export const Prompt: React.FC<Props> = ({ disabled, onSubmit }) => {
       }
       if (key.backspace || key.delete) {
         if (picker.query.length === 0) {
-          // Backspace at the bare `@` closes the picker and erases the `@`.
           setValue(value.slice(0, picker.start));
           setPicker(null);
           return;
@@ -104,20 +165,33 @@ export const Prompt: React.FC<Props> = ({ disabled, onSubmit }) => {
     // ---- picker is closed ----
     if (key.return) {
       const text = value.trim();
+      // `/image` (or `/img`) opens the multi-select image picker instead of
+      // submitting — images are staged for the next message, not sent now.
+      if (text === '/image' || text === '/img') {
+        setValue('');
+        setSelected([]);
+        setPicker({ start: 0, query: '', index: 0, mode: 'image' });
+        return;
+      }
       if (text.length > 0) {
         setValue('');
         onSubmit(text);
       }
       return;
     }
+    // Esc with an empty buffer clears any staged images.
+    if (key.escape) {
+      if (value.length === 0 && pendingImages.length > 0) onClearImages?.();
+      return;
+    }
     if (key.backspace || key.delete) {
       setValue((v) => v.slice(0, -1));
       return;
     }
-    if (key.ctrl || key.meta || key.escape || key.tab) return;
+    if (key.ctrl || key.meta || key.tab) return;
     if (input === '@' && shouldOpenAtPosition(value, value.length)) {
       setValue(value + input);
-      setPicker({ start: value.length, query: '', index: 0 });
+      setPicker({ start: value.length, query: '', index: 0, mode: 'default' });
       return;
     }
     if (input && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
@@ -127,11 +201,20 @@ export const Prompt: React.FC<Props> = ({ disabled, onSubmit }) => {
 
   return (
     <Box flexDirection="column">
+      {pendingImages.length > 0 ? (
+        <Box marginBottom={picker ? 0 : 1}>
+          <Text color="yellow">🖼 attached: </Text>
+          <Text>{pendingImages.map((p) => basename(p)).join(', ')}</Text>
+          <Text dimColor> ({pendingImages.length}) · /image to add · Esc to clear</Text>
+        </Box>
+      ) : null}
       {picker ? (
         <FilePicker
           query={picker.query}
           selectedIndex={picker.index}
           onResolve={handlePickerResolve}
+          mode={picker.mode}
+          selected={picker.mode === 'image' ? new Set(selected) : undefined}
         />
       ) : null}
       <Box>

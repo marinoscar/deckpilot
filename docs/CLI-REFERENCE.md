@@ -258,6 +258,20 @@ deckpilot start my-pitch --skill story-arc
 deckpilot start --model gpt-5 --critique-passes 5
 ```
 
+#### In-chat: attaching reference images (`/image`)
+
+Inside a chat session, type `/image` (or `/img`) to open a multi-select picker
+of image files in the working folder — the formats the model can see:
+**png, jpg/jpeg, gif, webp**. Navigate with `↑`/`↓`, `Space` toggles a file,
+`Enter` stages the selection, `Esc` cancels. Staged images appear in a tray
+above the prompt and are sent **with your next message** as a multimodal turn,
+so you can pair them with an instruction ("match this style", "rebuild this
+chart"). Run `/image` again to add more. Limits: 8 images per turn, ≤ 5 MB
+each (larger or unsupported files are skipped with a note). Attached images are
+copied into `~/.deckpilot/projects/<slug>/images/` and recorded in the
+transcript, so a resumed session still shows them. `Esc` on an empty prompt
+line clears the staged set.
+
 ---
 
 ### `deckpilot skill list | show | create | edit | delete`

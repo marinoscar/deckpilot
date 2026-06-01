@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { Box, Text } from 'ink';
 import type React from 'react';
 import type { TranscriptEntry } from '../chat/session.js';
@@ -16,7 +17,10 @@ export const Transcript: React.FC<Props> = ({ entries }) => {
                 <Text color="green" bold>
                   you
                 </Text>
-                <Text>{e.text}</Text>
+                {e.text ? <Text>{e.text}</Text> : null}
+                {e.images?.length ? (
+                  <Text color="yellow">🖼 {e.images.map((p) => basename(p)).join(', ')}</Text>
+                ) : null}
               </Box>
             );
           case 'assistant':

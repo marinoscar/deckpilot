@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import type { CopilotSession, ModelInfo } from '@github/copilot-sdk';
 import {
   type ProjectStyleGuide,
@@ -38,6 +38,7 @@ import type { ResolvedTemplate } from '../template/spec.js';
 import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
+import { buildImageAttachments, effectivePrompt } from './attachments.js';
 import type { TranscriptEntry } from './session-types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 export type { TranscriptEntry };
@@ -740,9 +741,18 @@ export class ChatSession {
     this.push({ kind: 'system', id: this.id(), text });
   }
 
-  async sendUserMessage(text: string): Promise<void> {
+  async sendUserMessage(text: string, imagePaths: string[] = []): Promise<void> {
     if (!this.session) throw new Error('Session not started');
-    this.push({ kind: 'user', id: this.id(), text });
+
+    // Build multimodal blob attachments from staged reference images. The
+    // {data, mimeType, type} shape mirrors the proven tool-result vision path.
+    const { attachments, attachedPaths, skipped } = await buildImageAttachments(imagePaths);
+    for (const s of skipped) this.addSystemMessage(`Skipped ${basename(s.path)} — ${s.reason}.`);
+
+    // Copy the attached images into the project so a resumed session shows them.
+    const stored = attachedPaths.length ? await this.recordAttachedImages(attachedPaths) : [];
+    this.push({ kind: 'user', id: this.id(), text, ...(stored.length ? { images: stored } : {}) });
+
     // Persist the SDK session id on first user turn — we need it for resume.
     if (this.project && !this.project.manifest.sessionId && this.session.sessionId) {
       this.project.manifest = { ...this.project.manifest, sessionId: this.session.sessionId };
@@ -751,11 +761,47 @@ export class ChatSession {
     }
     this.setBusy(true);
     try {
-      await this.session.send({ prompt: text });
+      // VERIFY (live backend): blob attachments must reach the model as vision.
+      // Mirrors the proven tool-result {data,mimeType,type:'image'} shape. If a
+      // real run shows the model only sees filenames, fall back to a
+      // view_reference_images tool returning binaryResultsForLlm.
+      const prompt = effectivePrompt(text);
+      await this.session.send(attachments.length ? { prompt, attachments } : { prompt });
     } catch (e) {
       this.setBusy(false);
       throw e;
     }
+  }
+
+  /**
+   * Copy staged reference images into the project's `images/` directory (or a
+   * tmpdir when ephemeral) so a resumed session can show what was attached.
+   * Best-effort: on copy failure the source path is kept. Returns the stored
+   * paths in input order.
+   */
+  async recordAttachedImages(paths: string[]): Promise<string[]> {
+    if (paths.length === 0) return [];
+    const baseDir = this.project
+      ? resolve(this.project.rootDir, 'images')
+      : resolve(tmpdir(), 'deckpilot-image-attachments');
+    try {
+      await mkdir(baseDir, { recursive: true });
+    } catch (e) {
+      log.warn('recordAttachedImages mkdir failed:', (e as Error).message);
+      return paths;
+    }
+    const stored: string[] = [];
+    for (const p of paths) {
+      const dest = resolve(baseDir, basename(p));
+      try {
+        await writeFile(dest, await readFile(p));
+        stored.push(dest);
+      } catch (e) {
+        log.warn('recordAttachedImages copy failed:', (e as Error).message);
+        stored.push(p);
+      }
+    }
+    return stored;
   }
 
   async cancel(): Promise<void> {

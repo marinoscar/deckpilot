@@ -9,6 +9,7 @@ import { renderDeck } from '../render/renderer.js';
 import { listTemplates } from '../store/templates.js';
 import { summarizeTemplate as summarizeTemplateProfile } from '../template/profile.js';
 import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
+import { mergeImages } from '../util/files.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
@@ -33,6 +34,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
     session.getActiveTemplateName() ?? null,
   );
   const [saveState, setSaveState] = useState<SaveState | null>(session.getSaveState());
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   const lastCtrlC = useRef<number>(0);
 
   useEffect(() => session.subscribe(setEntries), [session]);
@@ -84,8 +86,10 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
       await handleSlash(slash, text);
       return;
     }
+    const images = pendingImages;
+    setPendingImages([]);
     try {
-      await session.sendUserMessage(text);
+      await session.sendUserMessage(text, images);
     } catch (e) {
       setStatus('error');
       session.addSystemMessage(`error: ${(e as Error).message}`);
@@ -350,7 +354,13 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
         {status === 'streaming' ? (
           <ThinkingIndicator />
         ) : (
-          <Prompt disabled={false} onSubmit={handleSubmit} />
+          <Prompt
+            disabled={false}
+            onSubmit={handleSubmit}
+            pendingImages={pendingImages}
+            onCommitImages={(paths) => setPendingImages((cur) => mergeImages(cur, paths))}
+            onClearImages={() => setPendingImages([])}
+          />
         )}
         <StatusBar
           status={status}
