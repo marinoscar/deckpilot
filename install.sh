@@ -8,8 +8,6 @@
 #   ./install.sh --system              install system-wide via /usr/local/bin (uses sudo)
 #   ./install.sh --update              fast-path: fetch + build only (auto-detected on re-run)
 #   ./install.sh --reinstall           force the full install path even on an existing install
-#   ./install.sh --install-deps        install missing system deps without the y/N prompt
-#   ./install.sh --no-install-deps     never install system deps; just print the command
 #   ./install.sh --skip-doctor         skip the final `deckpilot doctor` verification
 #   ./install.sh --uninstall           remove the symlink + (if bootstrapped) the clone
 #   ./install.sh --no-build            skip the TypeScript build (dev relink)
@@ -35,7 +33,7 @@ set -euo pipefail
 
 # Bumped on every release of the installer. Printed at the top of every run so
 # users can confirm what they're actually executing (CDN cache misses are real).
-INSTALL_SCRIPT_VERSION="0.20.0"
+INSTALL_SCRIPT_VERSION="0.21.0"
 
 # NOTE: do NOT redirect bash's own stdin here. Under `curl ... | bash`, bash IS
 # reading the script from stdin. Redirecting stdin at the top would make bash
@@ -50,7 +48,6 @@ MODE="user"
 SKIP_BUILD=0
 QUIET=0
 ACTION="install"
-FORCE_INSTALL_DEPS=""   # "" / "yes" / "no"
 SKIP_DOCTOR=0
 FORCE_UPDATE=0          # set by --update; auto-detected too
 FORCE_REINSTALL=0       # set by --reinstall
@@ -63,8 +60,6 @@ while [ $# -gt 0 ]; do
     --quiet)           QUIET=1; shift ;;
     --update)          FORCE_UPDATE=1; shift ;;
     --reinstall)       FORCE_REINSTALL=1; shift ;;
-    --install-deps)    FORCE_INSTALL_DEPS="yes"; shift ;;
-    --no-install-deps) FORCE_INSTALL_DEPS="no"; shift ;;
     --skip-doctor)     SKIP_DOCTOR=1; shift ;;
     --log)
       shift
@@ -72,7 +67,7 @@ while [ $# -gt 0 ]; do
       DECKPILOT_INSTALL_LOG="$1"; shift
       ;;
     -h|--help)
-      sed -n '2,32p' "$0"
+      sed -n '2,30p' "$0"
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -236,21 +231,13 @@ detect_pm() {
 }
 
 # Map (package-manager, logical-dep) → distro package name(s).
-# Logical deps used: libreoffice, poppler, git.
+# Logical deps used: git. (Previews are pure-JS via pptx-glimpse — no system
+# packages needed.) Kept as reusable scaffolding for any future optional dep;
+# the per-PM mapping is smoke-tested in test/install-smoke.test.ts.
 # Echoes space-separated package names, OR a special marker for brew casks.
 pm_pkgname() {
   local pm=$1 dep=$2
   case "$pm:$dep" in
-    apt:libreoffice)     echo libreoffice ;;
-    dnf:libreoffice)     echo libreoffice ;;
-    pacman:libreoffice)  echo libreoffice-fresh ;;
-    zypper:libreoffice)  echo libreoffice ;;
-    brew:libreoffice)    echo "CASK:libreoffice" ;;
-    apt:poppler)         echo poppler-utils ;;
-    dnf:poppler)         echo poppler-utils ;;
-    pacman:poppler)      echo poppler ;;
-    zypper:poppler)      echo poppler-tools ;;
-    brew:poppler)        echo poppler ;;
     apt:git)             echo git ;;
     dnf:git)             echo git ;;
     pacman:git)          echo git ;;
@@ -336,8 +323,8 @@ preflight_node() {
   local v major
   v="$(node --version | sed 's/^v//')"
   major="${v%%.*}"
-  if [ "$major" -lt 20 ]; then
-    die "Node $v is too old. DeckPilot needs Node ≥ 20. Try 'nvm install 22'."
+  if [ "$major" -lt 22 ]; then
+    die "Node $v is too old. DeckPilot needs Node ≥ 22. Try 'nvm install 22'."
   fi
   ok "Node $v"
 }
@@ -385,84 +372,9 @@ preflight_network() {
   fi
 }
 
-# Detect LibreOffice + poppler. Returns a list of missing logical deps via
-# the global MISSING_DEPS array.
-MISSING_DEPS=()
-preflight_deps() {
-  MISSING_DEPS=()
-  local has_office=0 has_pdftoppm=0
-  if command -v soffice >/dev/null 2>&1 || command -v libreoffice >/dev/null 2>&1; then
-    has_office=1
-  fi
-  if command -v pdftoppm >/dev/null 2>&1; then
-    has_pdftoppm=1
-  fi
-  if [ "$has_office" -eq 1 ] && [ "$has_pdftoppm" -eq 1 ]; then
-    ok "Visual pipeline deps present (LibreOffice + pdftoppm)"
-    return 0
-  fi
-  if [ "$has_office" -eq 0 ]; then MISSING_DEPS+=("libreoffice"); fi
-  if [ "$has_pdftoppm" -eq 0 ]; then MISSING_DEPS+=("poppler"); fi
-  warn "Missing visual-pipeline deps: ${MISSING_DEPS[*]}"
-}
-
-# ---------- deps install ----------
-
-# Prompt y/N for consent. Returns 0 (yes) / 1 (no). Skips the prompt and
-# returns 0 when --install-deps was passed; returns 1 immediately when
-# --no-install-deps was passed; in non-interactive contexts (no TTY) returns 1
-# (so we degrade to printing the command).
-consent_to_install_deps() {
-  case "$FORCE_INSTALL_DEPS" in
-    yes) return 0 ;;
-    no)  return 1 ;;
-  esac
-  if [ ! -t 0 ]; then
-    return 1
-  fi
-  local ans
-  printf 'Install %s now? [y/N] ' "${MISSING_DEPS[*]}"
-  read -r ans || return 1
-  case "$ans" in
-    y|Y|yes|YES) return 0 ;;
-    *)           return 1 ;;
-  esac
-}
-
-deps_install_or_hint() {
-  [ "${#MISSING_DEPS[@]}" -gt 0 ] || return 0
-  step "System dependencies"
-
-  local os pm cmd
-  os="$(detect_os)"
-  pm="$(detect_pm)"
-  cmd="$(pm_install_cmd "$pm" "${MISSING_DEPS[@]}")"
-
-  note "Detected OS: $os · package manager: $pm"
-  note "These deps power vision-driven template extraction (template create --from <pptx>)"
-  note "and the visual critique loop. DeckPilot still installs without them — the"
-  note "affected features fall back to shallow paths or disable themselves."
-
-  if [ "$pm" = "unknown" ]; then
-    warn "Couldn't detect your package manager."
-    note "Install LibreOffice + poppler manually for the affected features to work."
-    return 0
-  fi
-
-  if consent_to_install_deps; then
-    if pm_install "$pm" "${MISSING_DEPS[@]}"; then
-      ok "System deps installed."
-      MISSING_DEPS=()
-    else
-      warn "Dep install failed. Continuing without — features that need them will degrade."
-      note "You can retry manually: $cmd"
-    fi
-  else
-    warn "Skipped system-dep install."
-    note "To enable later, run:"
-    note "  $cmd"
-  fi
-}
+# Previews are pure-JS (pptx-glimpse, an npm dependency) — there are no longer
+# any optional system packages to detect or install. The pm_* helpers above are
+# kept as reusable scaffolding should a future feature need one.
 
 # ---------- bootstrap ----------
 
@@ -778,13 +690,6 @@ trap rollback_on_error ERR
   preflight_git
   preflight_disk
   preflight_network
-  preflight_deps
-
-  # Offer to install missing deps BEFORE bootstrap so a y/N can complete
-  # before we start downloading the world.
-  if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
-    deps_install_or_hint
-  fi
 
   bootstrap
 

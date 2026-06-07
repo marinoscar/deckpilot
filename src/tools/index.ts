@@ -212,7 +212,7 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
 
         if (!(await isPreviewAvailable())) {
           return {
-            textResultForLlm: `Slide code stored for "${args.slideId}". Visual preview unavailable (LibreOffice missing). Proceed without the PNG — tell the user, they can install with: sudo apt install libreoffice poppler-utils`,
+            textResultForLlm: `Slide code stored for "${args.slideId}". Visual preview unavailable (pptx-glimpse renderer not loadable). Proceed without the PNG — tell the user to reinstall dependencies with \`npm install\`.`,
             resultType: 'success' as const,
           };
         }
@@ -318,9 +318,9 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         if (!(await isPreviewAvailable())) {
           return {
             textResultForLlm:
-              'Visual preview is not available — LibreOffice (`soffice`) is not on $PATH. Tell the user and proceed without the visual critique.',
+              'Visual preview is not available — the pptx-glimpse renderer failed to load. Tell the user to reinstall dependencies (`npm install`) and proceed without the visual critique.',
             resultType: 'failure' as const,
-            error: 'libreoffice_missing',
+            error: 'preview_unavailable',
           };
         }
 

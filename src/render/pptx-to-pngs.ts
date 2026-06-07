@@ -5,40 +5,32 @@
  *   - Vision-driven template extraction (renders a user-supplied .pptx
  *     directly, no deck construction).
  *
- * Pipeline: soffice --convert-to pdf → pdftoppm -png. Both are part of the
- * standard LibreOffice + poppler-utils install on Linux/WSL/macOS.
+ * Pipeline: pure-JS via `pptx-glimpse` (renders text through opentype.js to
+ * SVG, then rasterises to PNG). No external binaries — no LibreOffice, no
+ * poppler — so previews work out of the box on Windows and Linux. Fonts are
+ * resolved from the OS font directories pptx-glimpse scans; missing brand
+ * fonts fall back via the mapping below (the generated .pptx itself always
+ * carries the correct font names — only the preview is approximate).
  */
-import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
-import { promisify } from 'node:util';
-import which from 'which';
-
-const exec = promisify(execFile);
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { convertPptxToPng } from 'pptx-glimpse';
 
 /**
- * Standard install locations to probe when the binary isn't on PATH. The
- * LibreOffice installer on Windows does NOT add `soffice.exe` to PATH by
- * default; macOS Homebrew puts it under /opt/homebrew on Apple Silicon.
+ * Substitutes for the fonts DeckPilot themes commonly request, so previews
+ * stay legible on hosts that don't ship them. Merged on top of pptx-glimpse's
+ * own DEFAULT_FONT_MAPPING (Calibri→Carlito, etc.), so we only add brand fonts.
  */
-const SOFFICE_FALLBACKS = [
-  // Windows
-  'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-  'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-  // macOS — both the .app bundle and brew-installed paths
-  '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-  '/opt/homebrew/bin/soffice',
-  '/usr/local/bin/soffice',
-];
+const FONT_MAPPING: Record<string, string> = {
+  Inter: 'Noto Sans',
+  'Inter Tight': 'Noto Sans',
+  Arial: 'Liberation Sans',
+  Helvetica: 'Liberation Sans',
+};
 
-const PDFTOPPM_FALLBACKS = [
-  // Windows — common locations after `scoop install poppler` / manual zip extract
-  'C:\\ProgramData\\chocolatey\\bin\\pdftoppm.exe',
-  // macOS / Homebrew
-  '/opt/homebrew/bin/pdftoppm',
-  '/usr/local/bin/pdftoppm',
-];
+/** Slide width in inches for a 16:9 deck (see slide-api.ts SLIDE dims). */
+const SLIDE_WIDTH_IN = 13.333;
 
 export class PreviewUnavailableError extends Error {
   constructor(message: string) {
@@ -47,50 +39,36 @@ export class PreviewUnavailableError extends Error {
   }
 }
 
-let cachedBinary: string | null | undefined;
+/**
+ * The pure-JS renderer is always present (it's a bundled dependency), so
+ * previews are always available. Kept async + boolean for API compatibility
+ * with the callers that gate the visual loop on it.
+ */
+export async function isPreviewAvailable(): Promise<boolean> {
+  return typeof convertPptxToPng === 'function';
+}
 
 /**
- * Resolve the absolute path of the LibreOffice binary if it's available
- * anywhere — PATH first, then a small set of standard install locations
- * for Windows / macOS where the installer doesn't always touch PATH.
- *
- * Cross-platform via the `which` npm package (handles `.exe` and PATHEXT).
+ * Test-only escape hatch. The old soffice-probe cache is gone, so this is a
+ * no-op kept for callers/tests that still import it.
  */
-export async function findSofficeBinary(): Promise<string | null> {
-  if (cachedBinary !== undefined) return cachedBinary;
-  for (const candidate of ['soffice', 'libreoffice']) {
-    try {
-      const resolved = await which(candidate);
-      cachedBinary = resolved;
-      return resolved;
-    } catch {
-      // continue
-    }
-  }
-  for (const fallback of SOFFICE_FALLBACKS) {
-    if (existsSync(fallback)) {
-      cachedBinary = fallback;
-      return fallback;
-    }
-  }
-  cachedBinary = null;
-  return null;
-}
-
-/** Reset the cached lookup. Test-only escape hatch. */
 export function _resetSofficeProbe(): void {
-  cachedBinary = undefined;
-}
-
-export async function isPreviewAvailable(): Promise<boolean> {
-  return (await findSofficeBinary()) !== null;
+  // no-op — there is no binary probe to reset anymore.
 }
 
 export type PptxToPngsOptions = {
-  /** DPI passed to pdftoppm. 150 = preview quality, 100 = lighter for vision. */
+  /**
+   * Approximate output resolution. Mapped to a pixel width
+   * (`round(13.333in * dpi)`); height tracks the deck's real aspect ratio.
+   * 150 = preview quality, 100 = lighter for vision-driven extraction.
+   */
   dpi?: number;
-  /** Per-step timeout in ms. Defaults to 60s. */
+  /** Retained for API compatibility; rendering is in-process so this is a no-op. */
   timeoutMs?: number;
+  /** Extra font directories to scan in addition to the OS font dirs. */
+  fontDirs?: string[];
+  /** Extra PPTX-font → substitute mappings, merged over the defaults. */
+  fontMapping?: Record<string, string>;
 };
 
 /**
@@ -104,110 +82,44 @@ export async function pptxToPngs(
   outDir: string,
   opts: PptxToPngsOptions = {},
 ): Promise<string[]> {
-  const soffice = await findSofficeBinary();
-  if (!soffice) {
-    throw new PreviewUnavailableError(
-      'LibreOffice is not installed. On Ubuntu/WSL: sudo apt install libreoffice poppler-utils. On macOS: brew install --cask libreoffice && brew install poppler.',
-    );
-  }
   if (!existsSync(pptxPath)) {
     throw new Error(`No such file: ${pptxPath}`);
   }
 
   await mkdir(outDir, { recursive: true });
 
-  await rasteriseViaPdf(soffice, pptxPath, outDir, opts);
+  const dpi = opts.dpi ?? 150;
+  // pptx-glimpse takes pixel width (not dpi); height is derived from the
+  // slide's true aspect ratio, so 4:3 and 16:9 decks both render correctly.
+  const width = Math.round(SLIDE_WIDTH_IN * dpi);
 
-  // Collect the produced PNGs in numeric order.
-  const entries = await readdir(outDir);
-  const pngs = entries
-    .filter((f) => /^slide-\d{3}\.png$/.test(f))
-    .sort()
-    .map((f) => join(outDir, f));
-  if (pngs.length === 0) {
-    throw new Error(`No slide PNGs produced in ${outDir}. Check LibreOffice + pdftoppm install.`);
-  }
-  return pngs;
-}
-
-async function rasteriseViaPdf(
-  soffice: string,
-  pptxPath: string,
-  outDir: string,
-  opts: PptxToPngsOptions,
-): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const buf = await readFile(pptxPath);
+  let results: Awaited<ReturnType<typeof convertPptxToPng>>;
   try {
-    await exec(
-      soffice,
-      [
-        '--headless',
-        '--norestore',
-        '--nofirststartwizard',
-        '--convert-to',
-        'pdf',
-        '--outdir',
-        outDir,
-        pptxPath,
-      ],
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 50 },
-    );
-  } catch (e) {
-    throw new Error(`LibreOffice PDF export failed: ${(e as Error).message}`);
-  }
-
-  // soffice names the PDF after the input basename, dropping any path.
-  // Use `path.basename` (not `split('/').pop()`) so this works on Windows
-  // too — split('/') leaves `C:\Users\…\deck.pptx` intact, which then
-  // gets join()'d under outDir and produces a doubled path like
-  // `<outDir>\C:\Users\…\deck.pdf`.
-  const pdfBase = basename(pptxPath).replace(/\.pptx$/i, '.pdf');
-  const pdfPath = join(outDir, pdfBase);
-  if (!existsSync(pdfPath)) {
-    throw new Error(`Expected ${pdfPath} after LibreOffice PDF conversion`);
-  }
-
-  let pdftoppmBin: string;
-  try {
-    pdftoppmBin = await which('pdftoppm');
-  } catch {
-    const fallback = PDFTOPPM_FALLBACKS.find((p) => existsSync(p));
-    if (!fallback) {
-      throw new PreviewUnavailableError(
-        '`pdftoppm` (poppler-utils) is required for the preview pipeline. On Ubuntu/WSL: sudo apt install poppler-utils. On macOS: brew install poppler. On Windows: scoop install poppler (or choco install poppler).',
-      );
-    }
-    pdftoppmBin = fallback;
-  }
-
-  const dpi = String(opts.dpi ?? 150);
-  const slidePrefix = join(outDir, 'slide');
-  try {
-    await exec(pdftoppmBin, ['-png', '-r', dpi, pdfPath, slidePrefix], {
-      timeout: timeoutMs,
-      maxBuffer: 1024 * 1024 * 50,
+    results = await convertPptxToPng(buf, {
+      width,
+      logLevel: 'warn',
+      fontMapping: { ...FONT_MAPPING, ...(opts.fontMapping ?? {}) },
+      ...(opts.fontDirs ? { fontDirs: opts.fontDirs } : {}),
     });
   } catch (e) {
-    throw new Error(`pdftoppm failed: ${(e as Error).message}`);
+    throw new PreviewUnavailableError(`pptx-glimpse render failed: ${(e as Error).message}`);
   }
 
-  // pdftoppm names files slide-1.png, slide-2.png … with no zero-pad. Rename
-  // to slide-001.png so sorting is lexical and stable across deck sizes.
-  const entries = await readdir(outDir);
-  for (const f of entries) {
-    const m = f.match(/^slide-(\d+)\.png$/);
-    if (!m) continue;
-    const n = Number(m[1]);
-    const padded = `slide-${String(n).padStart(3, '0')}.png`;
-    if (padded === f) continue;
-    const oldPath = join(outDir, f);
-    const newPath = join(outDir, padded);
-    if (!existsSync(newPath)) {
-      const data = await readFile(oldPath);
-      await writeFile(newPath, data);
-      await rm(oldPath);
-    }
+  if (results.length === 0) {
+    throw new Error(`No slides rendered from ${pptxPath}`);
   }
+
+  // Zero-pad so the filenames sort lexically and stably across deck sizes.
+  results.sort((a, b) => a.slideNumber - b.slideNumber);
+  const pngs: string[] = [];
+  for (const r of results) {
+    const name = `slide-${String(r.slideNumber).padStart(3, '0')}.png`;
+    const outPath = join(outDir, name);
+    await writeFile(outPath, r.png);
+    pngs.push(outPath);
+  }
+  return pngs;
 }
 
 export async function readPng(path: string): Promise<Buffer> {

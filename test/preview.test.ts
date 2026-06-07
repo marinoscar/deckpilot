@@ -1,14 +1,10 @@
-import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { type DeckBrief, DeckBriefSchema } from '../src/deck/brief.js';
-import { _resetSofficeProbe, isPreviewAvailable, renderSlideToPng } from '../src/render/preview.js';
-
-const exec = promisify(execFile);
+import { isPreviewAvailable, renderSlideToPng } from '../src/render/preview.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'deckpilot-preview-test-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -56,49 +52,17 @@ const slideCode = new Map<string, string>([
   ],
 ]);
 
-let haveSoffice = false;
-let havePdftoppm = false;
-
-beforeAll(async () => {
-  _resetSofficeProbe();
-  for (const bin of ['soffice', 'libreoffice']) {
-    try {
-      await exec('which', [bin]);
-      haveSoffice = true;
-      break;
-    } catch {
-      // continue
-    }
-  }
-  try {
-    await exec('which', ['pdftoppm']);
-    havePdftoppm = true;
-  } catch {
-    // ignore
-  }
-});
-
 describe('isPreviewAvailable', () => {
-  it('reflects what the host has installed', async () => {
+  it('is always true — the renderer is a bundled pure-JS dependency', async () => {
     const v = await isPreviewAvailable();
-    expect(v).toBe(haveSoffice);
+    expect(v).toBe(true);
   });
 });
 
 describe('renderSlideToPng', () => {
-  it.runIf(haveSoffice && havePdftoppm)(
-    'writes a PNG larger than zero bytes for a known slide id',
-    async () => {
-      const png = await renderSlideToPng(brief, slideCode, 'cards', { cacheDir: dir });
-      expect(png).toMatch(/slide-\d+\.png$/);
-      expect(statSync(png).size).toBeGreaterThan(0);
-    },
-    120_000,
-  );
-
-  it.runIf(!haveSoffice)('throws PreviewUnavailableError when soffice is missing', async () => {
-    await expect(renderSlideToPng(brief, slideCode, 'cards', { cacheDir: dir })).rejects.toThrow(
-      /LibreOffice/,
-    );
-  });
+  it('writes a PNG larger than zero bytes for a known slide id', async () => {
+    const png = await renderSlideToPng(brief, slideCode, 'cards', { cacheDir: dir });
+    expect(png).toMatch(/slide-\d+\.png$/);
+    expect(statSync(png).size).toBeGreaterThan(0);
+  }, 120_000);
 });

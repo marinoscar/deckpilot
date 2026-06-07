@@ -107,8 +107,8 @@ deckpilot config unset critique-passes
 ### `deckpilot doctor`
 
 Run preflight diagnostics: Node version, Copilot SDK reachable,
-authentication / entitlement, write permissions, LibreOffice / pdftoppm for
-slide preview, `$EDITOR` resolution.
+authentication / entitlement, write permissions, the pure-JS slide-preview
+renderer (pptx-glimpse — no external binaries), `$EDITOR` resolution.
 
 ```bash
 deckpilot doctor

@@ -3,14 +3,14 @@
  * has the LLM author a rich TemplateSpec by looking at the rendered
  * slides of a source .pptx.
  *
- *   1. Validate inputs / LibreOffice availability.
+ *   1. Validate inputs / preview-renderer availability.
  *   2. Boot a fresh DeckPilotClient (no project, no chat UI).
  *   3. Register the extraction tools (`study_pptx_slides`, `save_template`).
  *   4. session.sendAndWait("study … then save_template …") — the LLM
  *      drives the rest.
  *   5. Watch for the save callback; on success, disconnect + return path.
  *
- * Falls back to `templateFromPptx` (OOXML-only) when LibreOffice is missing.
+ * Falls back to `templateFromPptx` (OOXML-only) when the renderer is unavailable.
  */
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -52,7 +52,7 @@ export type ExtractFromPptxOptions = {
 };
 
 export type ExtractEvent =
-  | { kind: 'libreoffice'; available: boolean }
+  | { kind: 'preview'; available: boolean }
   | { kind: 'session-started'; model?: string }
   | { kind: 'tool-start'; name: string }
   | { kind: 'tool-complete'; name: string; ok: boolean }
@@ -68,7 +68,7 @@ export type ExtractResult = {
 
 /**
  * Run the vision-driven extraction. On any non-recoverable failure (no
- * LibreOffice, no auth, timeout, model never calls save_template), falls
+ * preview renderer, no auth, timeout, model never calls save_template), falls
  * back to the OOXML-only `templateFromPptx` path so the CLI always
  * produces a template the user can iterate on.
  */
@@ -80,10 +80,10 @@ export async function extractTemplateFromPptx(
     throw new ExtractionError(`No such file: ${opts.pptxPath}`);
   }
 
-  const libreOk = await isPreviewAvailable();
-  opts.onProgress?.({ kind: 'libreoffice', available: libreOk });
-  if (!libreOk) {
-    return shallowFallback(opts, 'LibreOffice not found on PATH');
+  const previewOk = await isPreviewAvailable();
+  opts.onProgress?.({ kind: 'preview', available: previewOk });
+  if (!previewOk) {
+    return shallowFallback(opts, 'pptx-glimpse renderer unavailable');
   }
 
   // v0.16: pre-extract OOXML BEFORE booting the LLM session. The master,

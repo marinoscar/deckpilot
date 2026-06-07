@@ -59,7 +59,8 @@ export function buildSlideProxy(slide: PSlide, theme: Theme): SlideProxy {
       }
       return (...args: unknown[]) => {
         validateMethodArgs(name, args, w, h);
-        return Reflect.apply(target[name], target, args);
+        const finalArgs = name === 'addTable' ? normalizeTableArgs(args) : args;
+        return Reflect.apply(target[name], target, finalArgs);
       };
     },
     set(target, prop, value) {
@@ -100,6 +101,37 @@ function validateMethodArgs(method: string, args: unknown[], slideW: number, sli
     if (!arg || typeof arg !== 'object' || Array.isArray(arg)) continue;
     validateOptionsBag(method, arg as Record<string, unknown>, slideW, slideH);
   }
+}
+
+/**
+ * pptxgenjs emits `<a:tr h="0">` for every row when `addTable` is called
+ * without explicit row heights or a total table height. PowerPoint and
+ * LibreOffice treat that 0 as a *minimum* and auto-grow each row to fit its
+ * content, so it looks fine there — but strict rasterisers (e.g. the
+ * pptx-glimpse preview renderer) take h=0 literally and stack every row at the
+ * same y, producing an overlapping mess.
+ *
+ * To keep previews faithful, inject a sensible default `rowH` (inches) when the
+ * author specified neither `rowH` nor `h`. This is a *minimum* height, so it
+ * doesn't clip taller content in PowerPoint/LibreOffice; for dense multi-line
+ * tables the author can still pass an explicit `rowH`.
+ */
+function normalizeTableArgs(args: unknown[]): unknown[] {
+  const rows = args[0];
+  const rawOpts = args[1];
+  const hasOpts = !!rawOpts && typeof rawOpts === 'object' && !Array.isArray(rawOpts);
+  const opts: Record<string, unknown> = hasOpts ? { ...(rawOpts as object) } : {};
+  if (!('rowH' in opts) && !('h' in opts)) {
+    const fontSize = typeof opts.fontSize === 'number' ? opts.fontSize : 18;
+    opts.rowH = defaultRowHeightInches(fontSize);
+  }
+  return [rows, opts, ...args.slice(2)];
+}
+
+/** Default per-row height in inches: ~1.4× line-height plus cell margins. */
+function defaultRowHeightInches(fontSizePt: number): number {
+  const lineInches = (fontSizePt * 1.4) / 72;
+  return Math.round((lineInches + 0.12) * 100) / 100;
 }
 
 function validateOptionsBag(

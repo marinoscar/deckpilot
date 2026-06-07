@@ -8,7 +8,6 @@ import { join } from 'node:path';
  *   2. The recorded INSTALL_SCRIPT_VERSION matches package.json.
  *   3. Every parameter declared in the param() block is documented in the
  *      header comment (and vice-versa).
- *   4. The dep-to-PM map covers every (pm, dep) pair we promise to handle.
  *
  * Real syntax validation happens the first time a Windows user runs it.
  */
@@ -52,21 +51,6 @@ describe('install.ps1', () => {
     }
     for (const p of params) {
       expect(documented.has(p), `parameter -${p} is declared but not in the header`).toBe(true);
-    }
-  });
-
-  it('declares an install-command mapping for every supported (pm, dep) pair we promise', () => {
-    const text = readFileSync(installPs1, 'utf8');
-    const required: [string, string][] = [
-      ['winget', 'libreoffice'],
-      ['scoop', 'libreoffice'],
-      ['choco', 'libreoffice'],
-      ['scoop', 'poppler'],
-      ['choco', 'poppler'],
-    ];
-    for (const [pm, dep] of required) {
-      const pattern = new RegExp(`'${pm}:${dep}'`);
-      expect(text, `Get-InstallCommand mapping missing for ${pm}:${dep}`).toMatch(pattern);
     }
   });
 

@@ -63,9 +63,9 @@ export function buildExtractTools(ctx: ExtractContext): Tool[] {
         if (!(await isPreviewAvailable())) {
           return {
             textResultForLlm:
-              'LibreOffice is not available on PATH; cannot render slides. The orchestrator will fall back to OOXML-only extraction.',
+              'The pptx-glimpse renderer is unavailable; cannot render slides. The orchestrator will fall back to OOXML-only extraction.',
             resultType: 'failure' as const,
-            error: 'libreoffice_missing',
+            error: 'preview_unavailable',
           };
         }
         const outDir = mkdtempSync(join(tmpdir(), 'deckpilot-extract-'));

@@ -72,9 +72,7 @@ describe('install.sh', () => {
     const text = readFileSync(installSh, 'utf8');
     const required = ['apt', 'dnf', 'pacman', 'zypper', 'brew'];
     for (const pm of required) {
-      expect(text, `pm_pkgname mapping missing for ${pm}`).toMatch(
-        new RegExp(`${pm}:(libreoffice|poppler|git)`),
-      );
+      expect(text, `pm_pkgname mapping missing for ${pm}`).toMatch(new RegExp(`${pm}:git`));
     }
   });
 

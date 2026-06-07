@@ -1,18 +1,16 @@
 ﻿# DeckPilot installer for Windows (PowerShell 5.1+ / PowerShell 7+).
 #
 # Mirrors install.sh: downloads the repo (zip tarball, no git required),
-# builds, links the `deckpilot` command, offers to install LibreOffice +
-# poppler (the visual-pipeline deps), then runs `deckpilot doctor` to
+# builds, links the `deckpilot` command, then runs `deckpilot doctor` to
 # verify the install end-to-end. Re-running it auto-detects existing
-# installs and switches into a fast update path.
+# installs and switches into a fast update path. Previews are pure-JS
+# (pptx-glimpse) — no external binaries to install.
 #
 # Usage:
 #   .\install.ps1                       install for the current user via `npm link`
 #   .\install.ps1 -System               install system-wide (requires admin)
 #   .\install.ps1 -Update               fast-path: refresh + build only
 #   .\install.ps1 -Reinstall            force full install path even on an existing install
-#   .\install.ps1 -InstallDeps          install missing system deps without prompt
-#   .\install.ps1 -NoInstallDeps        never auto-install system deps; just print the command
 #   .\install.ps1 -SkipDoctor           skip the final `deckpilot doctor` verification
 #   .\install.ps1 -Uninstall            remove the symlink + (if bootstrapped) the install dir
 #   .\install.ps1 -NoBuild              skip the TypeScript build
@@ -35,8 +33,6 @@ param(
     [switch] $Uninstall,
     [switch] $Update,
     [switch] $Reinstall,
-    [switch] $InstallDeps,
-    [switch] $NoInstallDeps,
     [switch] $SkipDoctor,
     [switch] $NoBuild,
     [switch] $Quiet,
@@ -45,7 +41,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.20.0'
+$INSTALL_SCRIPT_VERSION = '0.21.0'
 
 # ---------- globals ----------
 
@@ -83,7 +79,6 @@ $IsUpdate = $false
 $RollbackKind = ''       # 'fresh' | 'update' | ''
 $RollbackBackupDir = ''  # for update mode: full path to the .backup dir to restore on failure
 $OldLockHash = ''        # SHA1 of the previous package-lock.json; used to skip npm ci on no-op updates
-$MissingDeps = @()
 
 # ---------- output helpers ----------
 #
@@ -177,48 +172,6 @@ function Invoke-Retry([int] $Attempts, [scriptblock] $Block) {
     }
 }
 
-# ---------- package manager detection ----------
-
-function Get-PackageManager {
-    $pms = @()
-    if (Get-Command winget -ErrorAction SilentlyContinue) { $pms += 'winget' }
-    if (Get-Command scoop  -ErrorAction SilentlyContinue) { $pms += 'scoop' }
-    if (Get-Command choco  -ErrorAction SilentlyContinue) { $pms += 'choco' }
-    return $pms
-}
-
-function Get-InstallCommand($pm, $dep) {
-    switch ("${pm}:$dep") {
-        'winget:libreoffice' { return 'winget install --id TheDocumentFoundation.LibreOffice --silent' }
-        'scoop:libreoffice'  { return 'scoop bucket add extras; scoop install libreoffice' }
-        'choco:libreoffice'  { return 'choco install -y libreoffice-fresh' }
-        'winget:poppler'     { return $null }
-        'scoop:poppler'      { return 'scoop install poppler' }
-        'choco:poppler'      { return 'choco install -y poppler' }
-        default              { return $null }
-    }
-}
-
-function Get-DepsInstallPlan($pms, $deps) {
-    $commands = @()
-    $usedPms = @()
-    $skipped = @()
-    foreach ($dep in $deps) {
-        $matched = $false
-        foreach ($pm in $pms) {
-            $cmd = Get-InstallCommand $pm $dep
-            if ($cmd) {
-                $commands += $cmd
-                $usedPms += $pm
-                $matched = $true
-                break
-            }
-        }
-        if (-not $matched) { $skipped += $dep }
-    }
-    return @{ commands = $commands; usedPms = ($usedPms | Select-Object -Unique); skipped = $skipped }
-}
-
 # ---------- rollback ----------
 
 function Invoke-Rollback {
@@ -253,8 +206,8 @@ function Test-Preflight-Node {
     }
     $v = (node --version).TrimStart('v')
     $major = [int]($v.Split('.')[0])
-    if ($major -lt 20) {
-        Write-Die "Node $v is too old. DeckPilot needs Node >= 20. Install with: winget install OpenJS.NodeJS.LTS"
+    if ($major -lt 22) {
+        Write-Die "Node $v is too old. DeckPilot needs Node >= 22. Install with: winget install OpenJS.NodeJS.LTS"
     }
     Write-Ok "Node $v"
 }
@@ -285,92 +238,8 @@ function Test-Preflight-Network {
     }
 }
 
-function Test-Preflight-Deps {
-    $script:MissingDeps = @()
-    $hasOffice = $false
-    foreach ($name in @('soffice', 'libreoffice', 'soffice.exe')) {
-        if (Get-Command $name -ErrorAction SilentlyContinue) { $hasOffice = $true; break }
-    }
-    if (-not $hasOffice) {
-        foreach ($p in @(
-            'C:\Program Files\LibreOffice\program\soffice.exe',
-            'C:\Program Files (x86)\LibreOffice\program\soffice.exe'
-        )) {
-            if (Test-Path $p) { $hasOffice = $true; break }
-        }
-    }
-    $hasPdftoppm = [bool] (Get-Command pdftoppm -ErrorAction SilentlyContinue)
-    if (-not $hasPdftoppm) {
-        if (Test-Path 'C:\ProgramData\chocolatey\bin\pdftoppm.exe') { $hasPdftoppm = $true }
-    }
-
-    if ($hasOffice -and $hasPdftoppm) {
-        Write-Ok "Visual pipeline deps present (LibreOffice + pdftoppm)"
-        return
-    }
-    if (-not $hasOffice)    { $script:MissingDeps += 'libreoffice' }
-    if (-not $hasPdftoppm)  { $script:MissingDeps += 'poppler' }
-    Write-Warn "Missing visual-pipeline deps: $($script:MissingDeps -join ', ')"
-}
-
-# ---------- deps install ----------
-
-function Get-Consent {
-    if ($InstallDeps)   { return $true }
-    if ($NoInstallDeps) { return $false }
-    if (-not [Environment]::UserInteractive) { return $false }
-    if (-not $Host.UI.RawUI) { return $false }
-    $reply = Read-Host "Install $($script:MissingDeps -join ', ') now? [y/N]"
-    return ($reply -match '^[yY]')
-}
-
-function Install-Or-Hint-Deps {
-    if ($script:MissingDeps.Count -eq 0) { return }
-    Write-Step "System dependencies"
-    $pms = Get-PackageManager
-    if ($pms.Count -eq 0) {
-        Write-Warn "No supported package manager found (winget / scoop / choco)."
-        Write-Note "Install winget (Windows 11 has it) or scoop (https://scoop.sh) and re-run with -InstallDeps."
-        Write-Note "Manual installs:"
-        Write-Note "  LibreOffice: https://www.libreoffice.org/download/download/"
-        Write-Note "  poppler:     https://github.com/oschwartz10612/poppler-windows/releases (unzip + add bin to PATH)"
-        return
-    }
-    Write-Note "Detected package manager(s): $($pms -join ', ')"
-
-    $plan = Get-DepsInstallPlan $pms $script:MissingDeps
-
-    if ($plan.skipped.Count -gt 0) {
-        Write-Warn "No installer mapping for: $($plan.skipped -join ', ')"
-        Write-Note "If you don't have scoop or chocolatey, install one of them, then re-run."
-        Write-Note "Quick scoop install (PowerShell):"
-        Write-Note "  Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
-        Write-Note "  iwr -useb get.scoop.sh | iex"
-    }
-    if ($plan.commands.Count -eq 0) {
-        return
-    }
-    Write-Note "Plan:"
-    foreach ($c in $plan.commands) { Write-Note "  $c" }
-    Write-Note "These deps power vision-driven template extraction and the visual critique loop."
-    Write-Note "DeckPilot still installs without them - affected features fall back."
-
-    if (Get-Consent) {
-        foreach ($c in $plan.commands) {
-            Write-Step "Running: $c"
-            try {
-                Invoke-Expression $c
-            } catch {
-                Write-Warn "Command failed: $($_.Exception.Message)"
-            }
-        }
-        Test-Preflight-Deps
-    } else {
-        Write-Warn "Skipped system-dep install."
-        Write-Note "To enable later, run:"
-        foreach ($c in $plan.commands) { Write-Note "  $c" }
-    }
-}
+# Previews are pure-JS (pptx-glimpse, an npm dependency) — there are no longer
+# any optional system packages to detect or install on Windows.
 
 # ---------- bootstrap (zip download path; no git required) ----------
 
@@ -710,11 +579,6 @@ function Invoke-Main {
         Test-Preflight-Node
         Test-Preflight-Disk
         Test-Preflight-Network
-        Test-Preflight-Deps
-
-        if ($MissingDeps.Count -gt 0) {
-            Install-Or-Hint-Deps
-        }
 
         Invoke-Bootstrap
 

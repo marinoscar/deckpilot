@@ -1,11 +1,10 @@
 import { constants, accessSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import which from 'which';
 import { BaseCommand } from '../cli/base-command.js';
 import { describeTokenSource, resolveGitHubToken } from '../copilot/auth.js';
 import { createClient } from '../copilot/client.js';
-import { findSofficeBinary } from '../render/pptx-to-pngs.js';
+import { isPreviewAvailable } from '../render/pptx-to-pngs.js';
 
 type Check = {
   name: string;
@@ -27,10 +26,10 @@ export default class Doctor extends BaseCommand {
 
     const major = Number.parseInt(process.versions.node.split('.')[0]!, 10);
     checks.push({
-      name: 'Node ≥ 20',
-      ok: major >= 20,
+      name: 'Node ≥ 22',
+      ok: major >= 22,
       detail: `node ${process.versions.node}`,
-      hint: major >= 20 ? undefined : 'Upgrade Node (try `nvm install 22`).',
+      hint: major >= 22 ? undefined : 'Upgrade Node (try `nvm install 22`).',
     });
 
     const token = resolveGitHubToken();
@@ -87,39 +86,19 @@ export default class Doctor extends BaseCommand {
         : 'Most likely an auth or entitlement issue. Run `deckpilot auth login`. If you have no Copilot subscription, visit https://github.com/settings/copilot.',
     });
 
-    // Visual preview pipeline — soft check, doesn't block any other feature.
-    // findSofficeBinary checks PATH + a small list of standard install locations
-    // on Windows / macOS so the LibreOffice installer's "not on PATH by default"
-    // behaviour doesn't make doctor cry wolf.
-    const sofficePath = await findSofficeBinary();
-    let previewOk = false;
-    let previewDetail = '';
-    if (sofficePath) {
-      let pdftoppmPath: string | null = null;
-      try {
-        pdftoppmPath = await which('pdftoppm');
-      } catch {
-        // probe standard locations as a fallback
-        const fallbacks = [
-          'C:\\ProgramData\\chocolatey\\bin\\pdftoppm.exe',
-          '/opt/homebrew/bin/pdftoppm',
-          '/usr/local/bin/pdftoppm',
-        ];
-        pdftoppmPath = fallbacks.find((p) => existsSync(p)) ?? null;
-      }
-      previewDetail = pdftoppmPath
-        ? `${sofficePath} + ${pdftoppmPath}`
-        : `${sofficePath} (pdftoppm missing — needed for per-slide PNGs)`;
-      previewOk = pdftoppmPath !== null;
-    } else {
-      previewDetail = 'libreoffice not found on PATH or in standard install locations';
-    }
+    // Visual preview pipeline — pure-JS (pptx-glimpse), bundled as a dependency,
+    // so it needs no external binaries. Soft check kept for parity/visibility.
+    const previewOk = await isPreviewAvailable();
     checks.push({
       name: 'Visual critique pipeline',
       ok: previewOk,
-      detail: previewDetail,
+      detail: previewOk
+        ? 'pure-JS preview (pptx-glimpse) — no external binaries needed'
+        : 'pptx-glimpse renderer not loadable',
       soft: true,
-      hint: previewOk ? undefined : platformInstallHint(),
+      hint: previewOk
+        ? undefined
+        : 'Reinstall dependencies (`npm install`) — pptx-glimpse should be present.',
     });
 
     for (const c of checks) {
@@ -132,19 +111,5 @@ export default class Doctor extends BaseCommand {
     // Soft checks don't fail the exit; only hard failures do.
     const allHardOk = checks.every((c) => c.ok || c.soft);
     if (!allHardOk) this.exit(1);
-  }
-}
-
-/** Platform-appropriate install hint for the LibreOffice + poppler pair. */
-function platformInstallHint(): string {
-  const base =
-    'The visual critique loop needs LibreOffice + poppler. DeckPilot still works without it — just run with --critique-passes 0.';
-  switch (process.platform) {
-    case 'darwin':
-      return `${base} On macOS: brew install --cask libreoffice && brew install poppler.`;
-    case 'win32':
-      return `${base} On Windows: winget install TheDocumentFoundation.LibreOffice (and add C:\\Program Files\\LibreOffice\\program to PATH), then \`scoop install poppler\` or \`choco install poppler\`.`;
-    default:
-      return `${base} On Ubuntu/WSL: sudo apt install libreoffice poppler-utils. On Fedora: sudo dnf install libreoffice poppler-utils. On Arch: sudo pacman -S libreoffice-fresh poppler.`;
   }
 }

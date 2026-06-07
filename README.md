@@ -4,7 +4,9 @@
 
 Have a normal conversation in your terminal — DeckPilot proposes the outline, lets you approve it, then writes the rendering code for every slide itself, looking at the rendered PNGs and revising until each one is good. Output: a real `.pptx` you can hand off.
 
-> **Status:** v0.20 — **reference attachments**: type `/doc` in the chat to attach document files (`.txt`/`.md`/`.pptx`/`.docx` — an SoW, a reference deck) whose text is extracted and injected as context, or `/image` to attach visual references the model can see. Both are sent with your next message and persist for the session. Plus faithful brand reproduction with **two background patterns**: `template create --from brand.pptx` extracts the source's slide master (logo, footer chrome), the title slide's full-bleed **cover background**, a distinct **content background** for body slides (an image when the deck has one, otherwise a solid fill in the deck's own colour), the deck's **full theme palette** (all six accents + dark/light + hyperlinks), the working palette, and each slide's named-shape layout vocabulary. At render time the cover background lands on the cover + section-divider slides and the content background on the rest — applied **deterministically by slide role**, so you stop seeing the LLM redraw your logo, repaint backgrounds, or guess at brand colours.
+> **Status:** v0.21 — **pure-JS previews, zero external binaries**: the visual critique loop and vision-driven template extraction now rasterize slides with [`pptx-glimpse`](https://github.com/hirokisakabe/pptx-glimpse) (a bundled npm dependency) instead of LibreOffice + poppler. A fresh install needs **no system packages** — just Node ≥ 22 — and works the same on Windows and Linux. Previews substitute fonts they can't find locally, so they're approximate; the generated `.pptx` always carries the correct fonts.
+>
+> Also in v0.20 — **reference attachments**: type `/doc` in the chat to attach document files (`.txt`/`.md`/`.pptx`/`.docx` — an SoW, a reference deck) whose text is extracted and injected as context, or `/image` to attach visual references the model can see. Both are sent with your next message and persist for the session. Plus faithful brand reproduction with **two background patterns**: `template create --from brand.pptx` extracts the source's slide master (logo, footer chrome), the title slide's full-bleed **cover background**, a distinct **content background** for body slides (an image when the deck has one, otherwise a solid fill in the deck's own colour), the deck's **full theme palette** (all six accents + dark/light + hyperlinks), the working palette, and each slide's named-shape layout vocabulary. At render time the cover background lands on the cover + section-divider slides and the content background on the rest — applied **deterministically by slide role**, so you stop seeing the LLM redraw your logo, repaint backgrounds, or guess at brand colours.
 >
 > Also in v0.15+: persistent CLI defaults (`deckpilot config get/set`), full TUI ↔ CLI parity (every menu action has a CLI sibling), template edit/export/import + project rename/export, an in-TUI template editor with `/` search and multi-select, and a comprehensive `docs/CLI-REFERENCE.md`.
 
@@ -18,9 +20,9 @@ Have a normal conversation in your terminal — DeckPilot proposes the outline, 
 |---|---|
 | **Ubuntu / Debian / WSL / Fedora / Arch / openSUSE / macOS** | Native install supported. |
 | **Windows (native)** | Supported as of v0.14. Open PowerShell and run `iwr -useb https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.ps1 \| iex`. See [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). For the best TUI experience use Windows Terminal + PowerShell 7+. WSL still works if you prefer it. |
-| **Node.js** | ≥ 20 (the installer will fail loudly if it's missing or too old). |
+| **Node.js** | ≥ 22 (the installer will fail loudly if it's missing or too old). |
 | **GitHub Copilot subscription** | Required — DeckPilot drives `@github/copilot-sdk`, which talks to the Copilot CLI runtime and your Copilot entitlement. |
-| **LibreOffice + poppler-utils** (recommended) | Needed for two features: (1) the visual critique loop where the LLM sees its own slides, (2) vision-driven `template create --from brand.pptx`. On Ubuntu/WSL: `sudo apt install libreoffice poppler-utils`. macOS: `brew install --cask libreoffice && brew install poppler`. Without it, DeckPilot still renders decks — just run with `--critique-passes 0`. |
+| **Slide previews** | Work out of the box — no system packages. Previews (the visual critique loop + vision-driven `template create --from brand.pptx`) are rendered in-process by [`pptx-glimpse`](https://github.com/hirokisakabe/pptx-glimpse), a bundled dependency. Install fonts you want pixel-faithful previews for (e.g. Inter); missing fonts are substituted in the preview only. |
 
 ### One-liner (recommended)
 
@@ -28,7 +30,7 @@ Have a normal conversation in your terminal — DeckPilot proposes the outline, 
 curl -fsSL https://raw.githubusercontent.com/marinoscar/deckpilot/main/install.sh | bash
 ```
 
-This clones DeckPilot into `~/.deckpilot/repo`, installs deps, builds, links the `deckpilot` binary onto your `PATH`, **offers to install LibreOffice + poppler-utils** (the visual pipeline deps), and runs `deckpilot doctor` at the end to verify the install end-to-end. Re-running it is safe — it auto-detects existing installs and switches into a fast update path (fetch + rebuild only).
+This clones DeckPilot into `~/.deckpilot/repo`, installs deps, builds, links the `deckpilot` binary onto your `PATH`, and runs `deckpilot doctor` at the end to verify the install end-to-end. No system packages to install — previews are pure-JS. Re-running it is safe — it auto-detects existing installs and switches into a fast update path (fetch + rebuild only).
 
 ### From a git clone
 
@@ -66,7 +68,7 @@ DECKPILOT_INSTALL_DIR=/opt/deckpilot \
 
 Other env vars: `DECKPILOT_REPO_URL` (fork support), `DECKPILOT_REPO_MIRRORS` (csv of fallback mirrors), `DECKPILOT_REF` (branch or tag), `DECKPILOT_INSTALL_LOG`.
 
-### Installing Node 20+ on a fresh Ubuntu box
+### Installing Node 22+ on a fresh Ubuntu box
 
 ```bash
 # Option A — NodeSource (system-wide)
@@ -84,7 +86,7 @@ nvm install 22
 ## First run
 
 ```bash
-deckpilot doctor       # preflight: Node, token, cwd writable, Copilot SDK reachable, LibreOffice pipeline
+deckpilot doctor       # preflight: Node, token, cwd writable, Copilot SDK reachable, preview renderer
 deckpilot auth login   # if doctor reports no token (uses the Copilot CLI device flow)
 deckpilot              # drops into the main menu
 ```
@@ -205,7 +207,7 @@ deckpilot template create acme --from ~/AcmeBrand.pptx
 #        (positions in inches, fonts, fills, sample text)
 #    Then a vision-driven LLM pass authors voiceHints, copyRules,
 #    guidance, and a one-line summary per donor slide.
-#    Needs LibreOffice + Copilot auth for the LLM pass.
+#    Needs Copilot auth for the LLM pass (previews are pure-JS, no extra deps).
 
 # 2. Shallow — OOXML extraction only (no LLM, fast)
 deckpilot template create acme --from ~/AcmeBrand.pptx --shallow
@@ -388,7 +390,7 @@ deckpilot config get|set|unset <key>
 
 # Auth + diagnostics
 deckpilot auth status|login|logout
-deckpilot doctor                     # Node version, Copilot SDK, LibreOffice, $EDITOR
+deckpilot doctor                     # Node version, Copilot SDK, preview renderer, $EDITOR
 deckpilot models                     # list models the Copilot SDK exposes
 deckpilot version
 deckpilot help [cmd]                 # detailed per-command help
@@ -458,7 +460,8 @@ rm -rf ~/.deckpilot           # projects + templates + config; irreversible
 - ✅ **v0.17** — Deeper donor extraction. `template create --from <pptx>` now also pulls the title slide's full-bleed **cover background** (resolved through slide → layout → title/section-header layouts, deduped against the master background) into `assets/cover-background.*`, and the donor's **full theme palette** (`themePalette` — all six accents + dark/light + hyperlink colours from `theme1.xml`'s `clrScheme`) alongside `paletteSamples`. `theme.assets` is now actually threaded onto the frozen theme the slide code sees, so the code-gen LLM can paint the cover background on covers/dividers. New `--no-cover-background` opt-out for the shallow path.
 - ✅ **v0.18** — **Two background patterns, applied by slide role.** Extraction now captures a distinct **content background** (`master.background`) alongside the **cover background** (`master.coverBackground`): the content background is the body slides' inherited canvas — an image when the donor has one, else a solid fill in the deck's paper colour. Briefs carry a per-slide `role` (`cover` / `divider` / `content`); the renderer applies the cover background to cover + section-divider slides and the content background to the rest **deterministically** (no longer reliant on the LLM painting it). New `--no-content-background` opt-out for the shallow path.
 - ✅ **v0.19** — **Visual reference images.** Type `/image` (or `/img`) in the chat to open a multi-select picker of image files in the working folder (png/jpg/gif/webp); chosen images stage in a tray above the prompt and attach to your next message as a multimodal turn the model can see — so you can say "match this style" or "rebuild this chart" with the picture attached. Multiple images per turn (cap 8, ≤ 5 MB each); attachments are copied into the project and recorded in the transcript so a resumed session shows them.
-- ✅ **v0.20 (current)** — **Document context.** Type `/doc` (or `/docs`) in the chat to attach reference documents — `.txt`, `.md`, `.pptx`, `.docx` (e.g. an SoW or a reference deck). Their text is extracted (slides + speaker notes for `.pptx`; paragraphs + tables for `.docx`) and injected as reference context with your next message, persisting in the conversation for the rest of the session. Multi-select tray alongside `/image`; generous size caps (~60k chars/doc, ~150k total) with truncation; copied into the project's `context/` dir and recorded in the transcript.
+- ✅ **v0.20** — **Document context.** Type `/doc` (or `/docs`) in the chat to attach reference documents — `.txt`, `.md`, `.pptx`, `.docx` (e.g. an SoW or a reference deck). Their text is extracted (slides + speaker notes for `.pptx`; paragraphs + tables for `.docx`) and injected as reference context with your next message, persisting in the conversation for the rest of the session. Multi-select tray alongside `/image`; generous size caps (~60k chars/doc, ~150k total) with truncation; copied into the project's `context/` dir and recorded in the transcript.
+- ✅ **v0.21 (current)** — **Pure-JS previews — LibreOffice + poppler removed.** Slide rasterization (the visual critique loop and vision-driven `template create --from <pptx>`) now runs in-process via [`pptx-glimpse`](https://github.com/hirokisakabe/pptx-glimpse), a bundled npm dependency. A fresh install needs **no external binaries** — the installer no longer probes for or offers to install `soffice`/`pdftoppm`, and `doctor` reports the pure-JS renderer. Footprint drops from ~500 MB of system packages to a ~30 MB dependency, with identical behaviour on Windows and Linux. Requires **Node ≥ 22**. Previews substitute fonts they can't find locally (the generated `.pptx` is unaffected). Also fixes 4:3 deck rendering (the layout name was wrong) and gives tables a sensible default row height so they lay out correctly in the preview.
 
 ## License
 

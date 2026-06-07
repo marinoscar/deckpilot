@@ -38,7 +38,7 @@ export async function renderDeck(
   opts: RenderOptions = {},
 ): Promise<string> {
   const pres = new PptxGenJS();
-  pres.layout = brief.theme.aspect === '4:3' ? 'LAYOUT_STANDARD' : 'LAYOUT_WIDE';
+  pres.layout = brief.theme.aspect === '4:3' ? 'LAYOUT_4x3' : 'LAYOUT_WIDE';
   pres.title = brief.meta.title;
   if (brief.meta.author) pres.author = brief.meta.author;
 

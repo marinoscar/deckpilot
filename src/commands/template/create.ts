@@ -190,13 +190,12 @@ export default class TemplateCreate extends BaseCommand {
   /** Pretty-print extraction progress events to stdout/stderr. */
   private printProgress(e: import('../../template/extract-from-pptx.js').ExtractEvent): void {
     switch (e.kind) {
-      case 'libreoffice':
+      case 'preview':
         if (!e.available) {
-          this.warn('LibreOffice not found on PATH — falling back to shallow OOXML extraction.');
-          this.warn('  Install with: sudo apt install libreoffice poppler-utils  (Ubuntu/WSL)');
           this.warn(
-            '              brew install --cask libreoffice && brew install poppler  (macOS)',
+            'Preview renderer (pptx-glimpse) unavailable — falling back to shallow OOXML extraction.',
           );
+          this.warn('  Reinstall dependencies with: npm install');
         }
         return;
       case 'session-started':

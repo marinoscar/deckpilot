@@ -66,7 +66,7 @@ export async function renderSlideToPng(
 
   if (!existsSync(expectedPng)) {
     throw new Error(
-      `Preview rendered but the expected file is missing: ${expectedPng}. Check that LibreOffice + pdftoppm are installed.`,
+      `Preview rendered but the expected file is missing: ${expectedPng}. The pptx-glimpse renderer may have produced fewer slides than expected.`,
     );
   }
   return expectedPng;

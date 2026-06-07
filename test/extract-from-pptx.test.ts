@@ -7,8 +7,8 @@ import { TemplateSpecSchema } from '../src/template/spec.js';
 
 /**
  * The vision-driven `extractTemplateFromPptx` orchestrator needs a real
- * Copilot SDK session + LibreOffice + an authenticated GitHub token. None
- * of those are available on CI. Instead we test:
+ * Copilot SDK session + an authenticated GitHub token, neither of which is
+ * available on CI. Instead we test:
  *
  *   - The schema-shape contract that the LLM is expected to produce.
  *   - The shallow OOXML fallback path, which has no external deps.

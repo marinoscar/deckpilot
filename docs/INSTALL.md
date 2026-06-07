@@ -31,9 +31,9 @@ into a **fast update mode** when it detects an existing install.
 
 | | |
 |---|---|
-| **Node.js ≥ 20** | Hard requirement. The installer fails loudly with NodeSource / nvm instructions if missing or too old. |
+| **Node.js ≥ 22** | Hard requirement. The installer fails loudly with NodeSource / nvm instructions if missing or too old. |
 | **GitHub Copilot subscription** | Required at *runtime* (not install). DeckPilot drives `@github/copilot-sdk`, which authenticates against your Copilot entitlement. |
-| **LibreOffice + poppler-utils** | Needed for two features: (1) **vision-driven `template create --from <pptx>`** (LLM looks at slides via vision) and (2) the **visual critique loop** where the LLM sees its own renders. DeckPilot still installs without them — affected features fall back. The installer offers to install them automatically (see below). |
+| **Slide previews** | No system packages required. The **visual critique loop** and **vision-driven `template create --from <pptx>`** render slides in-process via the bundled `pptx-glimpse` dependency. Install any brand fonts (e.g. Inter) you want pixel-faithful previews for — missing fonts are substituted in the preview only, never in the generated `.pptx`. |
 | **git** | Only needed for the bootstrap clone, not for local-checkout installs. |
 | **curl** | Used for the network preflight; absence is non-fatal (the check is skipped). |
 | **≥ 600 MB free** | Required in the install directory's parent. Mostly `node_modules`. |
@@ -41,21 +41,11 @@ into a **fast update mode** when it detects an existing install.
 ## How it runs
 
 ```
-DeckPilot installer v0.20.0
+DeckPilot installer v0.21.0
 · Preflight
 ✓ Node 22.22.1
 ✓ Disk: 14823 MB free in /home/you/.deckpilot
 ✓ Network: github.com reachable
-! Missing visual-pipeline deps: libreoffice poppler
-· System dependencies
-  Detected OS: linux · package manager: apt
-  These deps power vision-driven template extraction (template create --from <pptx>)
-  and the visual critique loop. DeckPilot still installs without them — the
-  affected features fall back to shallow paths or disable themselves.
-Install libreoffice poppler now? [y/N] y
-· Running: sudo apt-get update && sudo apt-get install -y libreoffice poppler-utils
-  [apt output streams here]
-✓ System deps installed.
 · Cloning https://github.com/marinoscar/deckpilot.git@main → /home/you/.deckpilot/repo
 ✓ Cloned from https://github.com/marinoscar/deckpilot.git
 · Installing npm deps
@@ -67,13 +57,13 @@ Install libreoffice poppler now? [y/N] y
 · Linking globally (npm link)
 ✓ Linked into /usr/local/bin/deckpilot
 · Smoke test
-✓ deckpilot/0.20.0 linux-x64 node-v22.22.1
+✓ deckpilot/0.21.0 linux-x64 node-v22.22.1
 · Running deckpilot doctor
-✓ Node ≥ 20 — node v22.22.1
+✓ Node ≥ 22 — node v22.22.1
 ✓ GitHub token resolvable — source: env COPILOT_GITHUB_TOKEN
 ✓ cwd writable — /home/you
 ✓ Copilot SDK reachable — ping ok at 2026-05-28T03:54:22Z
-✓ Visual critique pipeline — soffice found + pdftoppm
+✓ Visual critique pipeline — pure-JS preview (pptx-glimpse) — no external binaries needed
 
 DeckPilot is ready.
   Source checkout: /home/you/.deckpilot/repo
@@ -89,8 +79,6 @@ DeckPilot is ready.
 | `--system` | Install system-wide via `/usr/local/bin/deckpilot` (uses `sudo`). Default is per-user via `npm link`. |
 | `--update` | Force the update fast-path even when auto-detection wouldn't pick it. |
 | `--reinstall` | Skip auto-update detection; run the full install path on an existing install. |
-| `--install-deps` | Install missing system deps without the `[y/N]` prompt. Useful in CI / scripted installs (still requires sudo). |
-| `--no-install-deps` | Never auto-install system deps; just print the exact command for the detected platform. |
 | `--skip-doctor` | Skip the final `deckpilot doctor` verification step. |
 | `--no-build` | Skip the TypeScript build (dev re-link). |
 | `--quiet` | Minimal output (the install log captures the detail). |
@@ -113,7 +101,7 @@ DeckPilot is ready.
 The installer **auto-detects** when you re-run it on an existing install and
 switches into the update fast-path:
 
-- preflight: only checks Node / npm (skips disk / network / deps re-detect)
+- preflight: only checks Node / npm (skips disk / network)
 - bootstrap: `git fetch` + `git reset --hard origin/<ref>` (no re-clone)
 - build: `npm ci` only runs if `package-lock.json` actually changed since
   the previous HEAD; otherwise straight to `npm run build`
@@ -123,26 +111,19 @@ switches into the update fast-path:
 No-op updates take a few seconds. Real updates are bounded by `npm ci` and
 `tsc`. Force the full path with `--reinstall`.
 
-## Dependency consent: how it decides
+## System dependencies
 
-| Scenario | Default | With `--install-deps` | With `--no-install-deps` |
-|---|---|---|---|
-| TTY + deps missing | `[y/N]` prompt; install on `y` | install without prompt | print command, skip install |
-| No TTY (`curl \| bash`) + deps missing | print command, skip install | install without prompt | print command, skip install |
-| Deps present | nothing | nothing | nothing |
+There are none. Slide previews (the visual critique loop and vision-driven
+`template create --from <pptx>`) render in-process via the bundled
+`pptx-glimpse` dependency — no LibreOffice, no poppler, no `sudo`. The
+installer no longer probes for or offers to install system packages.
 
-Sudo is invoked **only** after explicit consent (either by answering `y` or
-by passing `--install-deps`).
-
-The exact command shown / run is platform-specific:
-
-| Platform | LibreOffice + poppler |
-|---|---|
-| apt (Ubuntu/Debian/WSL) | `sudo apt-get update && sudo apt-get install -y libreoffice poppler-utils` |
-| dnf (Fedora) | `sudo dnf install -y libreoffice poppler-utils` |
-| pacman (Arch) | `sudo pacman -Sy --noconfirm libreoffice-fresh poppler` |
-| zypper (openSUSE) | `sudo zypper --non-interactive install libreoffice poppler-tools` |
-| brew (macOS) | `brew install --cask libreoffice && brew install poppler` |
+> Fonts: `pptx-glimpse` draws text with whatever fonts are installed on the
+> machine and substitutes a close OSS face for any it can't find (so a preview
+> of an Inter deck on a host without Inter still renders, just with a stand-in
+> font). This affects the **preview only** — the generated `.pptx` always
+> references the real font names. Install the brand fonts you care about for
+> pixel-faithful previews.
 
 ## Resilience
 
@@ -157,7 +138,7 @@ The exact command shown / run is platform-specific:
 
 ## Common manual installs
 
-### Node 20+ on a fresh Ubuntu / Debian / WSL box
+### Node 22+ on a fresh Ubuntu / Debian / WSL box
 
 ```bash
 # Option A — NodeSource (system-wide)
@@ -175,11 +156,6 @@ nvm install 22
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
-
-### LibreOffice + poppler — if you'd rather install manually
-
-Run whichever line applies to your platform from the table above, then
-re-run `./install.sh` (or just `deckpilot doctor`) to verify.
 
 ## Uninstall
 
@@ -222,17 +198,12 @@ auth is the only thing missing.
 Network outage / firewall / proxy. The installer exits before touching
 anything destructive. Fix connectivity and re-run.
 
-**The `[y/N]` prompt for system deps never appears**
-You're running under `curl | bash` (no TTY). Re-run with
-`--install-deps` to skip the prompt and install, or download `install.sh`
-locally first and run it interactively.
-
 **Install seems to hang on `npm ci`**
 Check `~/.deckpilot/install.log` for the live output (the installer pipes
 it there). Usually a slow registry / corporate proxy.
 
 **I want to install a specific version / branch**
 ```bash
-DECKPILOT_REF=v0.20.0 ./install.sh         # tag
+DECKPILOT_REF=v0.21.0 ./install.sh         # tag
 DECKPILOT_REF=feature/x ./install.sh       # branch
 ```
