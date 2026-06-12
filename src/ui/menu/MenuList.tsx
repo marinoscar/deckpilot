@@ -1,13 +1,16 @@
-import { Box, Text, useInput } from 'ink';
+import { Box, Text } from 'ink';
+import { useInput } from 'ink';
 import type React from 'react';
 import { useState } from 'react';
+import { Theme } from '../theme.js';
 
 export type MenuItem<V> = {
   /** The value handed back to onSelect when this item is activated. */
   value: V;
-  /** Primary label (left column, bold when active). */
+  /** Primary label. */
   label: string;
-  /** Optional secondary text (right column or below, dim). */
+  /** Optional secondary text — shown dim on a single line below the list for
+   *  the *active* item only, so long descriptions never collide with labels. */
   detail?: string;
   /** Optional one-character hotkey users can press to jump-activate this item. */
   hotkey?: string;
@@ -19,25 +22,27 @@ type Props<V> = {
   items: MenuItem<V>[];
   /** Fires on Enter or hotkey press. */
   onSelect: (value: V) => void;
-  /** Fires on Esc / `b` / `q` — your screen decides what "back" means. */
+  /** Fires on Esc / `b` — your screen decides what "back" means. */
   onBack?: () => void;
   /** Optional starting index (default 0, or first non-separator). */
   initialIndex?: number;
-  /** Two-column layout: when true, detail right-aligns instead of dim-grey trailing. */
-  twoColumn?: boolean;
 };
+
+const CURSOR = '❯';
 
 /**
  * Reusable vertical menu. Up/Down to navigate, Enter to activate, hotkeys
  * (1-9, a-z) jump to + activate, Esc backs out. Separator items are
- * unselectable.
+ * unselectable. Renders a clean single column: the active row is marked with a
+ * `❯` cursor in the accent colour, and the active item's `detail` (if any) shows
+ * as one dim line below the list — no right-aligned column that can wrap or
+ * overlap the labels.
  */
 export function MenuList<V>({
   items,
   onSelect,
   onBack,
   initialIndex,
-  twoColumn = false,
 }: Props<V>): React.ReactElement {
   const firstSelectable = items.findIndex((i) => !i.separator);
   const start = initialIndex ?? (firstSelectable >= 0 ? firstSelectable : 0);
@@ -78,47 +83,35 @@ export function MenuList<V>({
     }
   });
 
+  const activeDetail = items[index]?.detail;
+
   return (
     <Box flexDirection="column">
       {items.map((it, i) => {
         if (it.separator) {
           return (
-            <Box key={`sep-${i}`} marginY={0}>
+            // biome-ignore lint/suspicious/noArrayIndexKey: separators have no value
+            <Box key={`sep-${i}`}>
               <Text dimColor>{it.label}</Text>
             </Box>
           );
         }
         const active = i === index;
-        const marker = active ? '▸' : ' ';
-        const labelColor = active ? 'cyanBright' : undefined;
-        if (twoColumn) {
-          return (
-            <Box key={String(it.value)} justifyContent="space-between">
-              <Box>
-                <Text color={labelColor} bold={active}>
-                  {marker} {it.label}
-                </Text>
-                {it.hotkey ? <Text dimColor>{`  (${it.hotkey})`}</Text> : null}
-              </Box>
-              {it.detail ? <Text dimColor>{it.detail}</Text> : null}
-            </Box>
-          );
-        }
         return (
           <Box key={String(it.value)}>
-            <Text color={labelColor} bold={active}>
-              {marker} {it.label}
+            <Text color={active ? Theme.primary : undefined} bold={active}>
+              {active ? `${CURSOR} ` : '  '}
+              {it.label}
             </Text>
-            {it.detail ? (
-              <>
-                <Text dimColor>{'   '}</Text>
-                <Text dimColor>{it.detail}</Text>
-              </>
-            ) : null}
             {it.hotkey ? <Text dimColor>{`  (${it.hotkey})`}</Text> : null}
           </Box>
         );
       })}
+      {activeDetail ? (
+        <Box marginTop={1}>
+          <Text dimColor>{activeDetail}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

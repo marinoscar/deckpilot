@@ -253,7 +253,6 @@ export const TemplatesBrowser: React.FC<Props> = ({
       >
         <MenuList
           items={items}
-          twoColumn
           onSelect={(choice) => {
             if (choice === 'blank') setMode({ kind: 'create-name' });
             else setMode({ kind: 'create-pptx-name' });
