@@ -318,7 +318,9 @@ Anything you type that doesn't start with `/` is sent to the model. Slash comman
 
 **The `@` picker:** type `@` in the prompt to open a popup of `.pptx` and `.brief.json` files in your working directory. Arrow keys to navigate, Enter to insert the path, Esc to cancel. Handy for `/template @brand.pptx` or `/load @last-deck.brief.json`.
 
-**Cancelling:** **Ctrl+C** while a response is streaming aborts the generation but keeps the session alive. A second **Ctrl+C** within ~1s returns to the main menu.
+**Editing the prompt:** the input is a rounded box with a movable caret — `←`/`→` and `Ctrl+A`/`Ctrl+E` to move, `Backspace`/`Delete` to edit at the caret. End a line with `\` then **Enter** (or **Shift+Enter** where your terminal supports it) to write a multi-line message; **Enter** alone submits. See [`docs/CLI-REFERENCE.md`](./docs/CLI-REFERENCE.md#in-chat-editing--keyboard) for the full key list.
+
+**Cancelling:** **Esc** or **Ctrl+C** while a response is streaming aborts the generation but keeps the session alive. A second **Ctrl+C** within ~1s returns to the main menu.
 
 ### Status chips
 
