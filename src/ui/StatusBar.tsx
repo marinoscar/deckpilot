@@ -75,7 +75,9 @@ export const StatusBar: React.FC<Props> = ({
         ) : null}
       </Box>
       <Box>
-        <Text dimColor>{hint ?? '· Ctrl+C cancels; double Ctrl+C exits · /help for commands'}</Text>
+        <Text dimColor>
+          {hint ?? '⏎ send · \\ + ⏎ newline · esc interrupt · double Ctrl+C exits · /help'}
+        </Text>
       </Box>
     </Box>
   );

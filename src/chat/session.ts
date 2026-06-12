@@ -85,6 +85,9 @@ export class ChatSession {
   private busy = false;
   private session: CopilotSession | null = null;
   private streamingId: string | null = null;
+  /** toolCallId → toolName, so the completion event can resolve the tool name
+   *  even when the SDK omits `toolDescription` on the complete event. */
+  private toolNames = new Map<string, string>();
   private nextId = 1;
   private requestedModel: string | undefined;
   private activeModel: string | null = null;
@@ -952,22 +955,26 @@ export class ChatSession {
       this.finalizeAssistant(content);
     });
     session.on('tool.execution_start', (event) => {
-      const data = event.data as { toolName?: string };
-      this.push({
-        kind: 'tool',
-        id: this.id(),
-        tool: data.toolName ?? 'unknown',
-        status: 'start',
-      });
+      const data = event.data as { toolName?: string; toolCallId?: string };
+      const tool = data.toolName ?? '';
+      // Remember the name by call id so the completion event can recover it
+      // (the SDK's complete payload only carries an optional toolDescription).
+      if (data.toolCallId && tool) this.toolNames.set(data.toolCallId, tool);
+      this.push({ kind: 'tool', id: this.id(), tool, status: 'start' });
     });
     session.on('tool.execution_complete', (event) => {
       const data = event.data as {
         success?: boolean;
         toolDescription?: { name?: string };
+        toolCallId?: string;
         error?: { message?: string; code?: string };
         result?: { content?: string };
       };
-      const name = data.toolDescription?.name ?? 'unknown';
+      const name =
+        data.toolDescription?.name ??
+        (data.toolCallId ? this.toolNames.get(data.toolCallId) : undefined) ??
+        '';
+      if (data.toolCallId) this.toolNames.delete(data.toolCallId);
       const success = data.success !== false;
       // Surface the failure message so the user sees WHY a tool failed,
       // not just THAT it failed. Falls back to the LLM-facing content on

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Static, useApp, useInput } from 'ink';
 import type React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatSession, SaveState, TranscriptEntry } from '../chat/session.js';
 import { HELP_TEXT, parseSlash } from '../chat/slash.js';
 import { summarizeBrief } from '../deck/brief.js';
@@ -13,7 +13,9 @@ import { mergeDocuments, mergeImages } from '../util/files.js';
 import { Prompt } from './Prompt.js';
 import { StatusBar } from './StatusBar.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
-import { Transcript } from './Transcript.js';
+import { TranscriptEntryView } from './Transcript.js';
+import { WelcomeBanner } from './WelcomeBanner.js';
+import { partition } from './transcript-partition.js';
 
 type Status = 'idle' | 'streaming' | 'cancelled' | 'error';
 
@@ -37,6 +39,18 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [pendingDocuments, setPendingDocuments] = useState<string[]>([]);
   const lastCtrlC = useRef<number>(0);
+
+  // ink's <Static> never lowers its internal high-water mark, so a transcript
+  // reset (/clear, /new) would otherwise leave stale scrollback and suppress
+  // new output. Bumping `epoch` remounts <Static> with a fresh slate.
+  const [epoch, setEpoch] = useState(0);
+  const prevLen = useRef(0);
+  useEffect(() => {
+    if (entries.length < prevLen.current) setEpoch((e) => e + 1);
+    prevLen.current = entries.length;
+  }, [entries.length]);
+
+  const { committed, live } = useMemo(() => partition(entries), [entries]);
 
   useEffect(() => session.subscribe(setEntries), [session]);
   useEffect(() => session.onModelChange(setModel), [session]);
@@ -62,6 +76,15 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
   useEffect(() => session.onSaveStateChange((s) => setSaveState(s)), [session]);
 
   useInput(async (input, key) => {
+    // Esc interrupts an in-flight generation (the prompt is hidden while
+    // streaming, so Esc is unambiguous here). Matches the spinner's hint.
+    if (key.escape && status === 'streaming') {
+      await session.cancel();
+      setStatus('cancelled');
+      session.addSystemMessage('Generation cancelled.');
+      setTimeout(() => setStatus('idle'), 600);
+      return;
+    }
     if (key.ctrl && (input === 'c' || input === '\x03')) {
       const now = Date.now();
       if (now - lastCtrlC.current < 1200) {
@@ -345,37 +368,55 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
   }
 
   return (
-    <Box flexDirection="column" paddingY={1}>
-      <Box marginBottom={1}>
-        <Text color="cyanBright" bold>
-          DeckPilot
-        </Text>
-        <Text dimColor> · conversational PowerPoint via GitHub Copilot</Text>
-      </Box>
-      <Transcript entries={entries} />
-      <Box marginTop={1} flexDirection="column">
-        {status === 'streaming' ? (
-          <ThinkingIndicator />
-        ) : (
-          <Prompt
-            disabled={false}
-            onSubmit={handleSubmit}
-            pendingImages={pendingImages}
-            onCommitImages={(paths) => setPendingImages((cur) => mergeImages(cur, paths))}
-            onClearImages={() => setPendingImages([])}
-            pendingDocuments={pendingDocuments}
-            onCommitDocuments={(paths) => setPendingDocuments((cur) => mergeDocuments(cur, paths))}
-            onClearDocuments={() => setPendingDocuments([])}
+    <>
+      {/* Finalized entries flushed once to native terminal scrollback. The
+          banner is the first item so it prints at the very top, once. */}
+      <Static key={epoch} items={committed}>
+        {(entry, i) =>
+          i === 0 ? (
+            <Box key="__welcome" flexDirection="column" paddingLeft={1}>
+              <WelcomeBanner />
+              <TranscriptEntryView entry={entry} />
+            </Box>
+          ) : (
+            <Box key={entry.id} paddingLeft={1}>
+              <TranscriptEntryView entry={entry} />
+            </Box>
+          )
+        }
+      </Static>
+      {/* When nothing is committed yet, the banner still needs to show. */}
+      <Box flexDirection="column" paddingX={1}>
+        {committed.length === 0 ? <WelcomeBanner /> : null}
+        {live.map((entry) => (
+          <TranscriptEntryView key={entry.id} entry={entry} />
+        ))}
+        <Box marginTop={live.length ? 1 : 0} flexDirection="column">
+          {status === 'streaming' ? (
+            <ThinkingIndicator />
+          ) : (
+            <Prompt
+              disabled={false}
+              onSubmit={handleSubmit}
+              pendingImages={pendingImages}
+              onCommitImages={(paths) => setPendingImages((cur) => mergeImages(cur, paths))}
+              onClearImages={() => setPendingImages([])}
+              pendingDocuments={pendingDocuments}
+              onCommitDocuments={(paths) =>
+                setPendingDocuments((cur) => mergeDocuments(cur, paths))
+              }
+              onClearDocuments={() => setPendingDocuments([])}
+            />
+          )}
+          <StatusBar
+            status={status}
+            model={model}
+            project={projectName}
+            template={templateName}
+            saveState={saveState}
           />
-        )}
-        <StatusBar
-          status={status}
-          model={model}
-          project={projectName}
-          template={templateName}
-          saveState={saveState}
-        />
+        </Box>
       </Box>
-    </Box>
+    </>
   );
 };

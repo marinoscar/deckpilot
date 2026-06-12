@@ -103,9 +103,10 @@ export const TextArea: React.FC<Props> = ({
         {visible.map((ln, i) => {
           const isLast = i === visible.length - 1;
           return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: line order is stable per render
             <Box key={i}>
               <Text>{ln}</Text>
-              {isLast ? <Text color={Theme.muted}>▌</Text> : null}
+              {isLast ? <Text inverse> </Text> : null}
             </Box>
           );
         })}

@@ -258,6 +258,27 @@ deckpilot start my-pitch --skill story-arc
 deckpilot start --model gpt-5 --critique-passes 5
 ```
 
+#### In-chat: editing & keyboard
+
+The prompt is a rounded input box with a movable block caret. Keys:
+
+| Key | Action |
+| --- | --- |
+| `←` / `→` | Move the caret one character. |
+| `Ctrl+A` / `Ctrl+E` | Jump to start / end of the buffer. |
+| `Backspace` / `Delete` | Delete the character before / after the caret. |
+| `↑` / `↓` | Move the caret between rows of a multi-line buffer. |
+| `Enter` | Submit the message. |
+| `\` then `Enter` | Insert a newline (backslash-continuation — works on every terminal). |
+| `Shift+Enter` | Insert a newline where the terminal reports the modifier. |
+| `Esc` | While generating, **interrupt** the in-flight turn; on an empty prompt, clear any staged attachments. |
+| `Ctrl+C` | Cancel the current generation; press twice within ~1.2s to exit. |
+
+Pasted text containing newlines is inserted verbatim (it does not submit). The
+conversation prints `⏺` before each assistant reply and tool call, with tool
+results on a `⎿` line; finalized turns are committed to the terminal's native
+scrollback so you can scroll back through long sessions.
+
 #### In-chat: attaching reference images (`/image`)
 
 Inside a chat session, type `/image` (or `/img`) to open a multi-select picker

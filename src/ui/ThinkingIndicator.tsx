@@ -64,12 +64,12 @@ export const ThinkingIndicator: React.FC = () => {
 
   return (
     <Box>
-      <Text color="cyan">{SPINNER[frame]} </Text>
-      <Text color="cyan" bold>
+      <Text color="cyanBright">{SPINNER[frame]} </Text>
+      <Text color="cyanBright" bold>
         {VERBS[verbIndex]}
       </Text>
-      <Text color="cyan">…</Text>
-      <Text dimColor> ({elapsed}s · Ctrl+C to cancel)</Text>
+      <Text color="cyanBright">…</Text>
+      <Text dimColor> ({elapsed}s · esc to interrupt)</Text>
     </Box>
   );
 };

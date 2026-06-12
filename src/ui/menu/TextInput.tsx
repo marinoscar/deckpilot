@@ -1,6 +1,9 @@
 import { Box, Text, useInput } from 'ink';
 import type React from 'react';
 import { useState } from 'react';
+import { CaretLine } from '../CaretLine.js';
+import { type Buffer, backspace, del, end, home, insert, left, right } from '../text-buffer.js';
+import { Theme } from '../theme.js';
 
 type Props = {
   /** Inline label shown to the left of the input. */
@@ -20,10 +23,11 @@ type Props = {
 };
 
 /**
- * Minimal single-line text input. Backspace works, no cursor movement.
- * Enter submits; Esc cancels. We deliberately avoid pulling in
- * ink-text-input — this gives us full control over key handling and skips a
- * native dep on a small surface.
+ * Minimal single-line text input with a movable block caret (←/→, Ctrl+A/E,
+ * Backspace/Delete at the caret). Enter submits; Esc cancels. We deliberately
+ * avoid pulling in ink-text-input — this gives us full control over key
+ * handling and skips a native dep on a small surface. The caret rendering is
+ * shared with the chat prompt via CaretLine.
  */
 export const TextInput: React.FC<Props> = ({
   label,
@@ -34,7 +38,10 @@ export const TextInput: React.FC<Props> = ({
   required = false,
   validate,
 }) => {
-  const [value, setValue] = useState(defaultValue);
+  const [buf, setBuf] = useState<Buffer>(() => ({
+    text: defaultValue,
+    caret: defaultValue.length,
+  }));
   const [error, setError] = useState<string | undefined>();
 
   useInput((input, key) => {
@@ -43,26 +50,35 @@ export const TextInput: React.FC<Props> = ({
       return;
     }
     if (key.return) {
-      if (required && !value.trim()) {
+      if (required && !buf.text.trim()) {
         setError('Please enter a value.');
         return;
       }
-      const err = validate?.(value);
+      const err = validate?.(buf.text);
       if (err) {
         setError(err);
         return;
       }
-      onSubmit(value);
+      onSubmit(buf.text);
       return;
     }
-    if (key.backspace || key.delete) {
-      setValue((v) => v.slice(0, -1));
+    if (key.leftArrow) return setBuf(left);
+    if (key.rightArrow) return setBuf(right);
+    if (key.ctrl && input === 'a') return setBuf(home);
+    if (key.ctrl && input === 'e') return setBuf(end);
+    if (key.backspace) {
+      setBuf(backspace);
+      setError(undefined);
+      return;
+    }
+    if (key.delete) {
+      setBuf(del);
       setError(undefined);
       return;
     }
     if (key.ctrl || key.meta || key.tab) return;
-    if (input && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
-      setValue((v) => v + input);
+    if (input && !key.upArrow && !key.downArrow) {
+      setBuf((b) => insert(b, input));
       setError(undefined);
     }
   });
@@ -72,12 +88,11 @@ export const TextInput: React.FC<Props> = ({
       <Box>
         {label ? (
           <>
-            <Text color="cyanBright">{label}</Text>
+            <Text color={Theme.primary}>{label}</Text>
             <Text> </Text>
           </>
         ) : null}
-        <Text>{value}</Text>
-        <Text color="gray">▌</Text>
+        <CaretLine text={buf.text} caret={buf.caret} />
       </Box>
       {error ? (
         <Box>
