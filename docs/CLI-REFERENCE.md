@@ -495,6 +495,39 @@ deckpilot template show acme-corp
 
 ---
 
+### `deckpilot transform`
+
+Reproduce an **original** deck's content in a **target** deck's visual style —
+"same content, new client." The target is loaded as a one-shot style template
+(palette, fonts, master/brand chrome); the original is seeded as content (its
+full extracted text **plus** a `study_original_slides` vision pass so the model
+sees every source slide). The agent reproduces the content **1:1** — same slide
+count and order, same titles/bullets/tables, the same speaker notes — proposes
+the slide-for-slide brief, and **pauses for your "build"** before building each
+slide through the normal critique loop. The chat stays open for adjustments.
+
+| Flag / arg | Description |
+| --- | --- |
+| `--original <pptx>` | **(required)** Path to the original `.pptx` — the content to reproduce. |
+| `--target <pptx>` | **(required)** Path to the target `.pptx` — the style/brand/colours to adopt. |
+| `[project]` | Project name (lower-case kebab). Defaults to `<original-stem>-transformed`. |
+| `--model <id>` | LLM model override. |
+| `--token <tok>` | GitHub token (or `COPILOT_GITHUB_TOKEN`). |
+| `--critique-passes <n>` | Preview passes per slide (0 disables; max 5). |
+
+Strict 1:1 requires the original to have **≤ 40 slides** (the deck brief is
+capped at 40); a larger deck fails fast with a clear message. The original/target
+paths are recorded on the project manifest, so a resumed transform restores the
+target style and the `study_original_slides` tool automatically. Also available
+in the TUI: **Transform a deck** on the main menu.
+
+```bash
+deckpilot transform --original client-a.pptx --target client-b.pptx
+deckpilot transform --original deck.pptx --target brand.pptx my-rebrand
+```
+
+---
+
 ### `deckpilot version`
 
 Print the installed version.

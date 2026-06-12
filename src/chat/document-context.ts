@@ -11,6 +11,10 @@ export const TRUNCATION_MARKER = '\n…[truncated]';
 export type ExtractOpts = {
   /** Include speaker notes when reading a .pptx (default true). */
   includeNotes?: boolean;
+  /** Per-document character budget. Defaults to MAX_DOC_CHARS. */
+  maxDocChars?: number;
+  /** Total character budget across all documents. Defaults to MAX_TOTAL_CONTEXT_CHARS. */
+  maxTotalChars?: number;
 };
 
 export type ContextBlockResult = {
@@ -63,6 +67,8 @@ export async function buildContextBlock(
   const attached: { path: string; chars: number }[] = [];
   const skipped: { path: string; reason: string }[] = [];
   const sections: { name: string; body: string }[] = [];
+  const maxDocChars = opts.maxDocChars ?? MAX_DOC_CHARS;
+  const maxTotalChars = opts.maxTotalChars ?? MAX_TOTAL_CONTEXT_CHARS;
   let total = 0;
   let truncated = false;
 
@@ -79,7 +85,7 @@ export async function buildContextBlock(
       continue;
     }
 
-    const remaining = MAX_TOTAL_CONTEXT_CHARS - total;
+    const remaining = maxTotalChars - total;
     if (remaining <= 0) {
       skipped.push({ path, reason: 'total context budget reached' });
       truncated = true;
@@ -87,7 +93,7 @@ export async function buildContextBlock(
     }
 
     let body = text;
-    const limit = Math.min(MAX_DOC_CHARS, remaining);
+    const limit = Math.min(maxDocChars, remaining);
     if (body.length > limit) {
       body = body.slice(0, limit) + TRUNCATION_MARKER;
       truncated = true;

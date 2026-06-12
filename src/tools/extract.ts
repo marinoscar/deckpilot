@@ -48,6 +48,82 @@ export type ExtractContext = {
   onSaved: (savedDir: string) => void;
 };
 
+/**
+ * A single tool for TRANSFORM chat sessions: rasterize the ORIGINAL deck so the
+ * model can see each source slide and reproduce its content 1:1. Built like
+ * `study_pptx_slides` but reframed — the images are CONTENT reference, not a
+ * style source (the target template supplies the style). The original path is
+ * closed over, so it needs no DeckToolContext.
+ */
+export function buildStudyOriginalTool(originalPath: string, maxSlides = 60): Tool {
+  return defineTool('study_original_slides', {
+    description: [
+      'Render the ORIGINAL source deck to PNG images and return them so you can see each slide you must reproduce.',
+      'Call this ONCE, before propose_deck_brief. Use the images to understand each slide’s CONTENT and structure (cover / section divider / table / body).',
+      'Take NO styling cues from these images — they show the OLD look you are replacing. The active template is the only source of visual style.',
+      `Up to ${maxSlides} slides are returned; longer decks are sampled from the start (their text is still in the attached reference context).`,
+    ].join(' '),
+    parameters: z.object({}),
+    skipPermission: true,
+    handler: async (_args, _invocation) => {
+      if (!(await isPreviewAvailable())) {
+        return {
+          textResultForLlm:
+            'The pptx-glimpse renderer is unavailable; cannot render the original slides. Rely on the attached reference text for the content.',
+          resultType: 'failure' as const,
+          error: 'preview_unavailable',
+        };
+      }
+      const outDir = mkdtempSync(join(tmpdir(), 'deckpilot-transform-'));
+      let pngs: string[];
+      try {
+        pngs = await pptxToPngs(originalPath, outDir, { dpi: 100 });
+      } catch (e) {
+        if (e instanceof PreviewUnavailableError) {
+          return {
+            textResultForLlm: e.message,
+            resultType: 'failure' as const,
+            error: 'preview_unavailable',
+          };
+        }
+        return {
+          textResultForLlm: `Original slide rendering failed: ${(e as Error).message}. Rely on the attached reference text for the content.`,
+          resultType: 'failure' as const,
+          error: 'render_failed',
+        };
+      }
+      const used = pngs.slice(0, maxSlides);
+      const truncated = pngs.length > used.length;
+      const binaries: Array<{
+        type: 'image';
+        mimeType: string;
+        data: string;
+        description: string;
+      }> = [];
+      for (let i = 0; i < used.length; i++) {
+        const buf = await readFile(used[i]!);
+        binaries.push({
+          type: 'image' as const,
+          mimeType: 'image/png',
+          data: buf.toString('base64'),
+          description: `Original slide ${i + 1} of ${pngs.length}`,
+        });
+      }
+      const note = truncated
+        ? `Returned the first ${used.length} of ${pngs.length} original slides (token-budget cap); the remaining slides' content is in the attached reference text.`
+        : `Returned all ${used.length} original slides.`;
+      return {
+        textResultForLlm: [
+          note,
+          'Reproduce each slide’s CONTENT 1:1 — same order, same text, same notes — in the active template’s style. Do NOT copy the original’s colours or fonts.',
+        ].join('\n\n'),
+        binaryResultsForLlm: binaries,
+        resultType: 'success' as const,
+      };
+    },
+  }) as Tool;
+}
+
 /** Build the two-tool surface for the extraction session. */
 export function buildExtractTools(ctx: ExtractContext): Tool[] {
   return [
@@ -177,9 +253,7 @@ export function buildExtractTools(ctx: ExtractContext): Tool[] {
  * have to redo work the extractor already did deterministically.
  */
 function summarizePreExtracted(spec: TemplateSpec): string {
-  const lines: string[] = [
-    '### OOXML pre-extracted (deterministic — do not re-derive)',
-  ];
+  const lines: string[] = ['### OOXML pre-extracted (deterministic — do not re-derive)'];
   lines.push(
     `- Theme: accent #${spec.theme.accent}, accentAlt #${spec.theme.accentAlt}, fonts ${spec.theme.fontHeading} / ${spec.theme.fontBody}, aspect ${spec.theme.aspect}.`,
   );
@@ -210,9 +284,7 @@ function summarizePreExtracted(spec: TemplateSpec): string {
   }
   if (spec.donorGeometry?.length) {
     lines.push(`- Donor slides catalogued: ${spec.donorGeometry.length}.`);
-    lines.push(
-      "  Author a tight one-line `summary` for each — what's the slide's visual purpose?",
-    );
+    lines.push("  Author a tight one-line `summary` for each — what's the slide's visual purpose?");
     for (const d of spec.donorGeometry) {
       const shapes = d.shapes.map((s) => `${s.name}(${s.kind})`).join(', ');
       lines.push(
@@ -233,10 +305,7 @@ function summarizePreExtracted(spec: TemplateSpec): string {
  * `paletteSamples`, and the geometric portion of `donorGeometry`; the LLM's
  * `summary` field on each donor is kept.
  */
-function mergeWithPreExtracted(
-  llm: TemplateSpec,
-  pre: TemplateSpec | undefined,
-): TemplateSpec {
+function mergeWithPreExtracted(llm: TemplateSpec, pre: TemplateSpec | undefined): TemplateSpec {
   if (!pre) return llm;
   const merged: TemplateSpec = { ...llm };
 

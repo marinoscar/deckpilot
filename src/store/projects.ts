@@ -69,6 +69,10 @@ export const ProjectManifestSchema = z.object({
     .optional(),
   model: z.string().min(1).max(64).optional(),
   critiquePassesPerSlide: z.number().int().min(0).max(5).default(3),
+  /** Transform mode: absolute paths to the ORIGINAL (content) and TARGET (style)
+   *  decks, persisted so a resumed transform restores the study tool + style. */
+  transformOriginalPath: z.string().optional(),
+  transformTargetPath: z.string().optional(),
 });
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema>;
 
@@ -121,6 +125,8 @@ export async function createProject(
     skillName?: string;
     model?: string;
     critiquePassesPerSlide?: number;
+    transformOriginalPath?: string;
+    transformTargetPath?: string;
   } = {},
 ): Promise<ProjectState> {
   const slug = await allocateSlug(name);
@@ -137,6 +143,8 @@ export async function createProject(
     skillName: opts.skillName,
     model: opts.model,
     critiquePassesPerSlide: opts.critiquePassesPerSlide ?? 3,
+    transformOriginalPath: opts.transformOriginalPath,
+    transformTargetPath: opts.transformTargetPath,
   });
   await atomicWriteJson(join(dir, 'project.json'), manifest);
 

@@ -2,6 +2,7 @@ import { render, useApp } from 'ink';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { ChatSession } from '../chat/session.js';
+import { TRANSFORM_DOC_CHAR_BUDGET, TRANSFORM_SEED_PROMPT } from '../chat/transform.js';
 import { createClient } from '../copilot/client.js';
 import type { ProjectListEntry } from '../store/projects.js';
 import type { SkillListEntry } from '../store/skills.js';
@@ -17,8 +18,15 @@ import { Settings } from './screens/Settings.js';
 import { SkillsBrowser } from './screens/SkillsBrowser.js';
 import { TemplateEditor } from './screens/TemplateEditor.js';
 import { TemplatesBrowser } from './screens/TemplatesBrowser.js';
+import { Transform } from './screens/Transform.js';
 
-type StartOpts = { projectName?: string; templateName?: string; skillName?: string };
+type StartOpts = {
+  projectName?: string;
+  templateName?: string;
+  skillName?: string;
+  /** Transform mode: reproduce the original's content in the target's style. */
+  transform?: { originalPath: string; targetPath: string };
+};
 
 type View =
   | { kind: 'main' }
@@ -27,6 +35,7 @@ type View =
   | { kind: 'template-editor'; mode: 'create' | 'edit'; initial: TemplateSpec }
   | { kind: 'skills' }
   | { kind: 'new-deck' }
+  | { kind: 'transform' }
   | { kind: 'settings' }
   | { kind: 'help' }
   | { kind: 'chat'; session: ChatSession }
@@ -70,6 +79,7 @@ export const RootApp: React.FC<Props> = ({
       projectName: opts.projectName,
       templateName: opts.templateName,
       skillName: opts.skillName,
+      ...(opts.transform ? { transform: opts.transform } : {}),
     });
     try {
       await session.start();
@@ -95,6 +105,16 @@ export const RootApp: React.FC<Props> = ({
     }
     setBusy(false);
     setView({ kind: 'chat', session });
+
+    // Transform: seed a fresh project after the chat is mounted so the first
+    // streamed turn is visible. A resumed transform already has a brief and its
+    // style is re-applied by start().
+    if (opts.transform && session.getBrief() === null && session.getAllSlideCode().size === 0) {
+      void session.sendUserMessage(TRANSFORM_SEED_PROMPT, [], [opts.transform.originalPath], {
+        maxDocChars: TRANSFORM_DOC_CHAR_BUDGET,
+        maxTotalChars: TRANSFORM_DOC_CHAR_BUDGET,
+      });
+    }
   }
 
   function back(): void {
@@ -129,6 +149,9 @@ export const RootApp: React.FC<Props> = ({
           switch (choice) {
             case 'start':
               setView({ kind: 'new-deck' });
+              return;
+            case 'transform':
+              setView({ kind: 'transform' });
               return;
             case 'resume':
               setView({ kind: 'projects', mode: 'resume' });
@@ -208,6 +231,20 @@ export const RootApp: React.FC<Props> = ({
 
   if (view.kind === 'new-deck') {
     return <NewDeck onStart={(opts) => void startChat(opts)} onBack={back} />;
+  }
+
+  if (view.kind === 'transform') {
+    return (
+      <Transform
+        onStart={(opts) =>
+          void startChat({
+            projectName: opts.projectName,
+            transform: { originalPath: opts.originalPath, targetPath: opts.targetPath },
+          })
+        }
+        onBack={back}
+      />
+    );
   }
 
   if (view.kind === 'settings') {

@@ -36,12 +36,14 @@ import {
 } from '../template/profile.js';
 import type { ResolvedTemplate } from '../template/spec.js';
 import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
+import { buildStudyOriginalTool } from '../tools/extract.js';
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
 import { buildImageAttachments, effectivePrompt } from './attachments.js';
-import { buildContextBlock } from './document-context.js';
+import { type ExtractOpts, buildContextBlock } from './document-context.js';
 import type { TranscriptEntry } from './session-types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
+import { TRANSFORM_STUDY_MAX_SLIDES, renderTransformGuidance } from './transform.js';
 export type { TranscriptEntry };
 
 export type SessionListener = (entries: TranscriptEntry[]) => void;
@@ -64,6 +66,12 @@ export type ChatSessionOptions = {
   templateName?: string;
   /** Load a skill (staged AI instructions) from ~/.deckpilot/skills/ before chat starts. */
   skillName?: string;
+  /**
+   * Transform mode: reproduce the ORIGINAL deck's content in the TARGET deck's
+   * style. The target is applied as a one-shot template; a study_original_slides
+   * tool is registered so the model can see the source.
+   */
+  transform?: { originalPath: string; targetPath: string };
   /** Skip the project store entirely (tests, /render dry-runs). */
   ephemeral?: boolean;
 };
@@ -118,6 +126,12 @@ export class ChatSession {
 
   private styleGuide: ProjectStyleGuide | null = null;
 
+  // ---- transform mode ----
+  /** Original deck path (content source) — registers study_original_slides. */
+  private transformOriginalPath: string | undefined;
+  /** Target deck path (style source) — applied as a one-shot template. */
+  private transformTargetPath: string | undefined;
+
   // ---- project state ----
   private project: ProjectState | null = null;
   private projectListeners = new Set<ProjectListener>();
@@ -145,6 +159,8 @@ export class ChatSession {
     this.requestedTemplateName = opts.templateName;
     this.requestedSkillName = opts.skillName;
     this.requestedProjectName = opts.projectName;
+    this.transformOriginalPath = opts.transform?.originalPath;
+    this.transformTargetPath = opts.transform?.targetPath;
     this.ephemeral = opts.ephemeral === true;
     if (typeof opts.critiquePassesPerSlide === 'number') {
       this.critiquePasses = clampCritique(opts.critiquePassesPerSlide);
@@ -570,12 +586,23 @@ export class ChatSession {
         } else {
           this.project = await createProject(this.requestedProjectName, {
             critiquePassesPerSlide: this.critiquePasses,
+            transformOriginalPath: this.transformOriginalPath,
+            transformTargetPath: this.transformTargetPath,
           });
         }
       } catch (e) {
         log.warn('Project initialisation failed:', (e as Error).message);
         this.project = null;
       }
+    }
+
+    // Transform mode: a resumed project carries the original/target paths in its
+    // manifest, so restore them when not provided via options. (The study tool
+    // and target style below depend on these being set before the prompt/tools
+    // are built.)
+    if (this.project) {
+      this.transformOriginalPath ??= this.project.manifest.transformOriginalPath;
+      this.transformTargetPath ??= this.project.manifest.transformTargetPath;
     }
 
     // Named template (preferred over legacy --template-path).
@@ -614,6 +641,9 @@ export class ChatSession {
 
     const systemPrompt = this.buildSystemPrompt();
     const tools = buildDeckTools(this.toolContext());
+    if (this.transformOriginalPath) {
+      tools.push(buildStudyOriginalTool(this.transformOriginalPath, TRANSFORM_STUDY_MAX_SLIDES));
+    }
 
     // Try to resume the prior SDK session if this project carries one.
     let resumed = false;
@@ -680,11 +710,37 @@ export class ChatSession {
         );
       }
     }
+
+    // Transform mode: apply the TARGET deck as a one-shot style template so its
+    // palette/fonts/master flow into the renderer + previews. (System-prompt
+    // guidance is handled separately in buildSystemPrompt.)
+    if (this.transformTargetPath) {
+      try {
+        const profile = await this.loadTemplate(this.transformTargetPath);
+        this.addSystemMessage(
+          `Transform style from ${basename(this.transformTargetPath)}: ${summarizeTemplateProfile(profile)}`,
+        );
+      } catch (e) {
+        this.addSystemMessage(
+          `Could not load transform target style from ${this.transformTargetPath}: ${(e as Error).message}. Continuing — the deck will use default styling.`,
+        );
+      }
+      if (this.transformOriginalPath) {
+        this.addSystemMessage(
+          `Transform mode: reproducing ${basename(this.transformOriginalPath)} 1:1 in the target style. The agent will study the source, propose the brief, and wait for your "build".`,
+        );
+      }
+    }
   }
 
   /** Compose the system prompt with optional template guidance + DECKPILOT.md + skill. */
   private buildSystemPrompt(): string {
     const parts: string[] = [SYSTEM_PROMPT];
+    // Transform contract first, so the template guidance below reads as the
+    // supplier of the locked style the contract refers to.
+    if (this.transformOriginalPath) {
+      parts.push(renderTransformGuidance());
+    }
     if (this.resolvedTemplate) {
       parts.push(renderTemplateGuidance(this.resolvedTemplate));
     }
@@ -749,6 +805,7 @@ export class ChatSession {
     text: string,
     imagePaths: string[] = [],
     documentPaths: string[] = [],
+    docOpts: ExtractOpts = {},
   ): Promise<void> {
     if (!this.session) throw new Error('Session not started');
 
@@ -759,7 +816,7 @@ export class ChatSession {
 
     // Extract text from staged reference documents and assemble a context block
     // appended to the SENT prompt only (kept out of the visible transcript).
-    const ctx = await buildContextBlock(documentPaths);
+    const ctx = await buildContextBlock(documentPaths, docOpts);
     for (const s of ctx.skipped)
       this.addSystemMessage(`Skipped ${basename(s.path)} — ${s.reason}.`);
     if (ctx.truncated) {
