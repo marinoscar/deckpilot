@@ -41,7 +41,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '0.22.0'
+$INSTALL_SCRIPT_VERSION = '0.22.1'
 
 # ---------- globals ----------
 
@@ -169,6 +169,35 @@ function Invoke-Retry([int] $Attempts, [scriptblock] $Block) {
             if ($i -ge $Attempts) { throw }
             Start-Sleep -Seconds ($i * 2)
         }
+    }
+}
+
+# Move a directory aside to a backup path before re-extracting. Windows often
+# refuses the rename when a file inside is locked (antivirus scanning a
+# node_modules binary, a lingering 'node'/'deckpilot' process, or an editor
+# open on the folder). Retry through transient locks, then fail with an
+# actionable message instead of a raw RenameItemIOError.
+function Move-DirAside([string] $dir, [string] $backup) {
+    if (Test-Path $backup) {
+        Remove-Item -Recurse -Force $backup -ErrorAction SilentlyContinue
+    }
+    $leaf = Split-Path -Leaf $backup
+    try {
+        Invoke-Retry 4 { Rename-Item -Path $dir -NewName $leaf -ErrorAction Stop }
+    } catch {
+        Write-Die @"
+Couldn't move the existing install aside:
+  $dir
+A file in it is locked by another process — usually a running 'deckpilot' or
+'node', an editor/terminal open on that folder, or antivirus scanning
+node_modules. Close those, then run:
+
+  Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+  Remove-Item -Recurse -Force '$dir','$backup' -ErrorAction SilentlyContinue
+
+and re-run this installer. If removal also fails, reboot and try again.
+(original error: $($_.Exception.Message))
+"@
     }
 }
 
@@ -369,9 +398,10 @@ function Invoke-Bootstrap {
         # Existing install. Snapshot for rollback + needs-install detection.
         $script:OldLockHash = Get-LockHash $RepoDir
         $backupDir = "$RepoDir.backup"
-        if (Test-Path $backupDir) { Remove-Item -Recurse -Force $backupDir -ErrorAction SilentlyContinue }
-        # Rename rather than copy — fast and avoids doubling disk usage.
-        Rename-Item -Path $RepoDir -NewName (Split-Path -Leaf $backupDir)
+        # Move aside rather than copy — fast and avoids doubling disk usage.
+        # Tolerates transient Windows file locks and gives an actionable error
+        # if the folder is genuinely held open.
+        Move-DirAside $RepoDir $backupDir
         $script:RollbackBackupDir = $backupDir
         $script:RollbackKind = 'update'
         Write-Step "Updating $RepoDir (ref: $Ref)"
