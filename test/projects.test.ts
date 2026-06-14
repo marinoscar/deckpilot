@@ -50,6 +50,13 @@ describe('projects store', () => {
     expect(existsSync(join(p.rootDir, 'slides'))).toBe(true);
   });
 
+  it('createProject persists improveSourcePath on the manifest', async () => {
+    const p = await createProject('imp', { improveSourcePath: '/decks/src.pptx' });
+    expect(p.manifest.improveSourcePath).toBe('/decks/src.pptx');
+    const loaded = await loadProject('imp');
+    expect(loaded.manifest.improveSourcePath).toBe('/decks/src.pptx');
+  });
+
   it('createProject auto-allocates project-N when name is omitted', async () => {
     const a = await createProject();
     const b = await createProject();

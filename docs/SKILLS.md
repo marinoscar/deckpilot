@@ -93,6 +93,8 @@ A skill is chosen per deck, like a template:
 - **TUI:** the "New deck" wizard's third step lists available skills (pick one or
   "No skill"). The startup picker (`deckpilot start`) also offers them.
 - **CLI:** `deckpilot start --skill story-arc` (or `--no-skill-picker` to skip).
+  `deckpilot improve --source <pptx> --template <name> --skill <name>` applies a
+  skill to a quality-check rebuild the same way.
 - **Default:** `deckpilot config set skill <name>` applies a skill whenever you
   don't pass `--skill`.
 

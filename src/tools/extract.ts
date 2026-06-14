@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 /**
  * Tools registered ONLY in the headless template-extraction session. Kept
  * separate from `src/tools/index.ts` (which builds the rich tool surface
@@ -119,6 +119,162 @@ export function buildStudyOriginalTool(originalPath: string, maxSlides = 60): To
         ].join('\n\n'),
         binaryResultsForLlm: binaries,
         resultType: 'success' as const,
+      };
+    },
+  }) as Tool;
+}
+
+/**
+ * A single tool for IMPROVE chat sessions: rasterize the SOURCE deck so the
+ * model can judge each slide's current content AND design before rebuilding a
+ * better version. Built like `study_original_slides`, but reframed — the images
+ * are the thing being CRITIQUED and replaced, not a style source (the chosen
+ * template supplies the new look). The source path is closed over, so it needs
+ * no DeckToolContext.
+ */
+export function buildStudySourceTool(sourcePath: string, maxSlides = 60): Tool {
+  return defineTool('study_source_slides', {
+    description: [
+      'Render the SOURCE deck to PNG images and return them so you can see how each slide currently looks.',
+      'Call this ONCE, before save_improvement_plan. Examine each slide critically for quality problems: weak or vague titles, overcrowded text, thin/low-value content, weak visual hierarchy, inconsistent type or colour, and dull or repetitive layouts.',
+      'Take NO styling cues from these images — they show the OLD look you are replacing. The active template is the only source of visual style.',
+      `Up to ${maxSlides} slides are returned; longer decks are sampled from the start (their text is still in the attached reference context).`,
+    ].join(' '),
+    parameters: z.object({}),
+    skipPermission: true,
+    handler: async (_args, _invocation) => {
+      if (!(await isPreviewAvailable())) {
+        return {
+          textResultForLlm:
+            'The pptx-glimpse renderer is unavailable; cannot render the source slides. Rely on the attached reference text to critique the content.',
+          resultType: 'failure' as const,
+          error: 'preview_unavailable',
+        };
+      }
+      const outDir = mkdtempSync(join(tmpdir(), 'deckpilot-improve-'));
+      let pngs: string[];
+      try {
+        pngs = await pptxToPngs(sourcePath, outDir, { dpi: 100 });
+      } catch (e) {
+        if (e instanceof PreviewUnavailableError) {
+          return {
+            textResultForLlm: e.message,
+            resultType: 'failure' as const,
+            error: 'preview_unavailable',
+          };
+        }
+        return {
+          textResultForLlm: `Source slide rendering failed: ${(e as Error).message}. Rely on the attached reference text to critique the content.`,
+          resultType: 'failure' as const,
+          error: 'render_failed',
+        };
+      }
+      const used = pngs.slice(0, maxSlides);
+      const truncated = pngs.length > used.length;
+      const binaries: Array<{
+        type: 'image';
+        mimeType: string;
+        data: string;
+        description: string;
+      }> = [];
+      for (let i = 0; i < used.length; i++) {
+        const buf = await readFile(used[i]!);
+        binaries.push({
+          type: 'image' as const,
+          mimeType: 'image/png',
+          data: buf.toString('base64'),
+          description: `Source slide ${i + 1} of ${pngs.length}`,
+        });
+      }
+      const note = truncated
+        ? `Returned the first ${used.length} of ${pngs.length} source slides (token-budget cap); the remaining slides' content is in the attached reference text.`
+        : `Returned all ${used.length} source slides.`;
+      return {
+        textResultForLlm: [
+          note,
+          'Critique each slide’s content AND design. Next, call save_improvement_plan with your assessment, then propose the rebuilt deck in the active template’s style. Do NOT copy the source’s colours or fonts.',
+        ].join('\n\n'),
+        binaryResultsForLlm: binaries,
+        resultType: 'success' as const,
+      };
+    },
+  }) as Tool;
+}
+
+const ImprovementPlanSchema = z.object({
+  summary: z
+    .string()
+    .min(1)
+    .max(8_000)
+    .describe(
+      'Overall assessment of the source deck — its biggest strengths and the most important weaknesses (narrative, content depth, clarity, and design). Markdown allowed.',
+    ),
+  recommendations: z
+    .array(
+      z.object({
+        slide: z
+          .string()
+          .min(1)
+          .max(64)
+          .describe('Which source slide(s) or section this refers to, e.g. "3", "4-5", "cover".'),
+        issue: z.string().min(1).max(2_000).describe('What is weak about this slide today.'),
+        fix: z
+          .string()
+          .min(1)
+          .max(2_000)
+          .describe('The concrete change to make in the rebuilt deck (content and/or design).'),
+      }),
+    )
+    .min(1)
+    .max(60)
+    .describe('Per-slide or per-section recommendations, in deck order.'),
+});
+
+/** Render the structured plan to a Markdown document. */
+function renderPlanMarkdown(plan: z.infer<typeof ImprovementPlanSchema>): string {
+  const lines: string[] = ['# Improvement plan', '', '## Overall assessment', '', plan.summary, ''];
+  lines.push('## Recommendations', '');
+  for (const r of plan.recommendations) {
+    lines.push(`### Slide ${r.slide}`, '', `- **Issue:** ${r.issue}`, `- **Fix:** ${r.fix}`, '');
+  }
+  return `${lines.join('\n').trimEnd()}\n`;
+}
+
+/**
+ * A single tool for IMPROVE chat sessions: persist the model's written
+ * improvement plan to `IMPROVEMENT-PLAN.md` in the project directory (or cwd
+ * when there is no project), so the user keeps it as a durable artifact. The
+ * model is instructed to call this once, before proposing the rebuilt brief.
+ */
+export function buildSaveImprovementPlanTool(getProjectRoot: () => string | null): Tool {
+  return defineTool('save_improvement_plan', {
+    description: [
+      'Save your written improvement plan for the source deck to a Markdown file the user can keep.',
+      'Call this ONCE, after study_source_slides and BEFORE propose_deck_brief.',
+      'Provide an honest overall assessment plus concrete per-slide recommendations. Do not ask the user to confirm.',
+    ].join(' '),
+    parameters: ImprovementPlanSchema,
+    skipPermission: true,
+    handler: async (plan): Promise<Result> => {
+      const parsed = ImprovementPlanSchema.safeParse(plan);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: `Improvement plan failed validation:\n${formatZodError(parsed.error)}`,
+          hint: 'Fix the offending fields and resend.',
+        };
+      }
+      const root = getProjectRoot() ?? process.cwd();
+      const dest = resolve(root, 'IMPROVEMENT-PLAN.md');
+      try {
+        await mkdir(root, { recursive: true });
+        await writeFile(dest, renderPlanMarkdown(parsed.data), 'utf8');
+      } catch (e) {
+        return { ok: false, error: `Could not write the plan: ${(e as Error).message}` };
+      }
+      return {
+        ok: true,
+        message: `Saved the improvement plan (${parsed.data.recommendations.length} recommendation(s)) to ${dest}. Now propose the rebuilt deck brief in the active template’s style, then wait for the user’s “build”.`,
       };
     },
   }) as Tool;

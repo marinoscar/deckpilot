@@ -73,6 +73,9 @@ export const ProjectManifestSchema = z.object({
    *  decks, persisted so a resumed transform restores the study tool + style. */
   transformOriginalPath: z.string().optional(),
   transformTargetPath: z.string().optional(),
+  /** Improve mode: absolute path to the SOURCE deck being critiqued + rebuilt,
+   *  persisted so a resumed improve restores the study tool + plan tool. */
+  improveSourcePath: z.string().optional(),
 });
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema>;
 
@@ -127,6 +130,7 @@ export async function createProject(
     critiquePassesPerSlide?: number;
     transformOriginalPath?: string;
     transformTargetPath?: string;
+    improveSourcePath?: string;
   } = {},
 ): Promise<ProjectState> {
   const slug = await allocateSlug(name);
@@ -145,6 +149,7 @@ export async function createProject(
     critiquePassesPerSlide: opts.critiquePassesPerSlide ?? 3,
     transformOriginalPath: opts.transformOriginalPath,
     transformTargetPath: opts.transformTargetPath,
+    improveSourcePath: opts.improveSourcePath,
   });
   await atomicWriteJson(join(dir, 'project.json'), manifest);
 

@@ -141,3 +141,6 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# oclif manifest is generated at pack time (prepack) and removed (postpack)
+oclif.manifest.json

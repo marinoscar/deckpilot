@@ -1,6 +1,7 @@
 import { render, useApp } from 'ink';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { IMPROVE_DOC_CHAR_BUDGET, IMPROVE_SEED_PROMPT } from '../chat/improve.js';
 import { ChatSession } from '../chat/session.js';
 import { TRANSFORM_DOC_CHAR_BUDGET, TRANSFORM_SEED_PROMPT } from '../chat/transform.js';
 import { createClient } from '../copilot/client.js';
@@ -11,6 +12,7 @@ import { type TemplateSpec, blankTemplate } from '../template/spec.js';
 import { App as ChatApp } from './App.js';
 import { AuthErrorBanner } from './screens/AuthErrorBanner.js';
 import { Help } from './screens/Help.js';
+import { Improve } from './screens/Improve.js';
 import { MainMenu } from './screens/MainMenu.js';
 import { NewDeck } from './screens/NewDeck.js';
 import { ProjectsBrowser } from './screens/ProjectsBrowser.js';
@@ -26,6 +28,8 @@ type StartOpts = {
   skillName?: string;
   /** Transform mode: reproduce the original's content in the target's style. */
   transform?: { originalPath: string; targetPath: string };
+  /** Improve mode: critique a source deck and rebuild a better version. */
+  improve?: { sourcePath: string };
 };
 
 type View =
@@ -36,6 +40,7 @@ type View =
   | { kind: 'skills' }
   | { kind: 'new-deck' }
   | { kind: 'transform' }
+  | { kind: 'improve' }
   | { kind: 'settings' }
   | { kind: 'help' }
   | { kind: 'chat'; session: ChatSession }
@@ -80,6 +85,7 @@ export const RootApp: React.FC<Props> = ({
       templateName: opts.templateName,
       skillName: opts.skillName,
       ...(opts.transform ? { transform: opts.transform } : {}),
+      ...(opts.improve ? { improve: opts.improve } : {}),
     });
     try {
       await session.start();
@@ -113,6 +119,14 @@ export const RootApp: React.FC<Props> = ({
       void session.sendUserMessage(TRANSFORM_SEED_PROMPT, [], [opts.transform.originalPath], {
         maxDocChars: TRANSFORM_DOC_CHAR_BUDGET,
         maxTotalChars: TRANSFORM_DOC_CHAR_BUDGET,
+      });
+    }
+
+    // Improve: seed a fresh project the same way — study + plan + rebuild.
+    if (opts.improve && session.getBrief() === null && session.getAllSlideCode().size === 0) {
+      void session.sendUserMessage(IMPROVE_SEED_PROMPT, [], [opts.improve.sourcePath], {
+        maxDocChars: IMPROVE_DOC_CHAR_BUDGET,
+        maxTotalChars: IMPROVE_DOC_CHAR_BUDGET,
       });
     }
   }
@@ -152,6 +166,9 @@ export const RootApp: React.FC<Props> = ({
               return;
             case 'transform':
               setView({ kind: 'transform' });
+              return;
+            case 'improve':
+              setView({ kind: 'improve' });
               return;
             case 'resume':
               setView({ kind: 'projects', mode: 'resume' });
@@ -240,6 +257,22 @@ export const RootApp: React.FC<Props> = ({
           void startChat({
             projectName: opts.projectName,
             transform: { originalPath: opts.originalPath, targetPath: opts.targetPath },
+          })
+        }
+        onBack={back}
+      />
+    );
+  }
+
+  if (view.kind === 'improve') {
+    return (
+      <Improve
+        onStart={(opts) =>
+          void startChat({
+            projectName: opts.projectName,
+            templateName: opts.templateName,
+            skillName: opts.skillName,
+            improve: { sourcePath: opts.sourcePath },
           })
         }
         onBack={back}

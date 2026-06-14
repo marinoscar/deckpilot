@@ -36,11 +36,16 @@ import {
 } from '../template/profile.js';
 import type { ResolvedTemplate } from '../template/spec.js';
 import { summarizeTemplate as summarizeTemplateSpec } from '../template/spec.js';
-import { buildStudyOriginalTool } from '../tools/extract.js';
+import {
+  buildSaveImprovementPlanTool,
+  buildStudyOriginalTool,
+  buildStudySourceTool,
+} from '../tools/extract.js';
 import { type DeckToolContext, buildDeckTools } from '../tools/index.js';
 import { log } from '../util/logger.js';
 import { buildImageAttachments, effectivePrompt } from './attachments.js';
 import { type ExtractOpts, buildContextBlock } from './document-context.js';
+import { IMPROVE_STUDY_MAX_SLIDES, renderImproveGuidance } from './improve.js';
 import type { TranscriptEntry } from './session-types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { TRANSFORM_STUDY_MAX_SLIDES, renderTransformGuidance } from './transform.js';
@@ -72,6 +77,13 @@ export type ChatSessionOptions = {
    * tool is registered so the model can see the source.
    */
   transform?: { originalPath: string; targetPath: string };
+  /**
+   * Improve mode: read a SOURCE deck, critique it, and rebuild a better version
+   * in the active (named) template's style. A study_source_slides tool and a
+   * save_improvement_plan tool are registered so the model can see + assess the
+   * source. The template is supplied via `templateName` (required by the CLI).
+   */
+  improve?: { sourcePath: string };
   /** Skip the project store entirely (tests, /render dry-runs). */
   ephemeral?: boolean;
 };
@@ -132,6 +144,10 @@ export class ChatSession {
   /** Target deck path (style source) — applied as a one-shot template. */
   private transformTargetPath: string | undefined;
 
+  // ---- improve mode ----
+  /** Source deck path (content to critique + rebuild) — registers study_source_slides. */
+  private improveSourcePath: string | undefined;
+
   // ---- project state ----
   private project: ProjectState | null = null;
   private projectListeners = new Set<ProjectListener>();
@@ -161,6 +177,7 @@ export class ChatSession {
     this.requestedProjectName = opts.projectName;
     this.transformOriginalPath = opts.transform?.originalPath;
     this.transformTargetPath = opts.transform?.targetPath;
+    this.improveSourcePath = opts.improve?.sourcePath;
     this.ephemeral = opts.ephemeral === true;
     if (typeof opts.critiquePassesPerSlide === 'number') {
       this.critiquePasses = clampCritique(opts.critiquePassesPerSlide);
@@ -588,6 +605,7 @@ export class ChatSession {
             critiquePassesPerSlide: this.critiquePasses,
             transformOriginalPath: this.transformOriginalPath,
             transformTargetPath: this.transformTargetPath,
+            improveSourcePath: this.improveSourcePath,
           });
         }
       } catch (e) {
@@ -603,6 +621,7 @@ export class ChatSession {
     if (this.project) {
       this.transformOriginalPath ??= this.project.manifest.transformOriginalPath;
       this.transformTargetPath ??= this.project.manifest.transformTargetPath;
+      this.improveSourcePath ??= this.project.manifest.improveSourcePath;
     }
 
     // Named template (preferred over legacy --template-path).
@@ -643,6 +662,10 @@ export class ChatSession {
     const tools = buildDeckTools(this.toolContext());
     if (this.transformOriginalPath) {
       tools.push(buildStudyOriginalTool(this.transformOriginalPath, TRANSFORM_STUDY_MAX_SLIDES));
+    }
+    if (this.improveSourcePath) {
+      tools.push(buildStudySourceTool(this.improveSourcePath, IMPROVE_STUDY_MAX_SLIDES));
+      tools.push(buildSaveImprovementPlanTool(() => this.project?.rootDir ?? null));
     }
 
     // Try to resume the prior SDK session if this project carries one.
@@ -731,6 +754,16 @@ export class ChatSession {
         );
       }
     }
+
+    // Improve mode: the source deck is seeded as content (text + a
+    // study_source_slides tool); the chosen named template supplies the style.
+    if (this.improveSourcePath) {
+      this.addSystemMessage(
+        `Improve mode: quality-checking ${basename(this.improveSourcePath)} and rebuilding a better version${
+          this.resolvedTemplate ? ` in the "${this.resolvedTemplate.name}" template's style` : ''
+        }. The agent will study it, save an improvement plan, propose the rebuilt brief, and wait for your "build".`,
+      );
+    }
   }
 
   /** Compose the system prompt with optional template guidance + DECKPILOT.md + skill. */
@@ -740,6 +773,9 @@ export class ChatSession {
     // supplier of the locked style the contract refers to.
     if (this.transformOriginalPath) {
       parts.push(renderTransformGuidance());
+    }
+    if (this.improveSourcePath) {
+      parts.push(renderImproveGuidance());
     }
     if (this.resolvedTemplate) {
       parts.push(renderTemplateGuidance(this.resolvedTemplate));

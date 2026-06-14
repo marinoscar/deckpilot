@@ -10,6 +10,7 @@ import { Theme } from '../theme.js';
 export type MainChoice =
   | 'start'
   | 'transform'
+  | 'improve'
   | 'resume'
   | 'projects'
   | 'templates'
@@ -84,6 +85,12 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
       label: 'Transform a deck',
       detail: "Reproduce a deck's content in another deck's style",
       hotkey: 'x',
+    },
+    {
+      value: 'improve',
+      label: 'Improve a deck',
+      detail: 'Quality-check a deck and rebuild a better version',
+      hotkey: 'i',
     },
     {
       value: 'resume',

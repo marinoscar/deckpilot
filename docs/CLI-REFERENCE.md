@@ -14,6 +14,8 @@ equivalent — this document is the canonical map.
 ```bash
 deckpilot                                    # opens the TUI menu
 deckpilot start my-pitch                     # creates / resumes a project, drops into chat
+deckpilot transform --original a.pptx --target b.pptx   # restyle a deck's content into another deck's look
+deckpilot improve --source deck.pptx --template acme    # quality-check a deck and rebuild a better version
 deckpilot resume my-pitch                    # alias for `start <name>` on an existing project
 deckpilot project list                       # lists every saved project
 deckpilot template list                      # lists every saved template
@@ -112,6 +114,45 @@ renderer (pptx-glimpse — no external binaries), `$EDITOR` resolution.
 
 ```bash
 deckpilot doctor
+```
+
+---
+
+### `deckpilot improve`
+
+Quality-check an existing deck and rebuild a **better** version in a chosen
+brand template's style. The source deck is seeded as content (its full
+extracted text **plus** a `study_source_slides` vision pass so the agent sees
+how every slide currently looks); the required **named template** supplies the
+rebuilt deck's style. Unlike `transform`'s strict 1:1, `improve` is a
+**rewrite**: the agent first calls `save_improvement_plan` to write a candid
+assessment (overall strengths/weaknesses + per-slide recommendations) to
+`IMPROVEMENT-PLAN.md` in the project, then proposes a rebuilt brief — it may
+sharpen titles, tighten bullets, restructure flow, enrich speaker notes, and
+redesign layouts for clear visual hierarchy — while preserving the source's
+facts and intent. It **pauses for your "build"** before building each slide
+through the normal critique loop, then stays open for adjustments.
+
+| Flag / arg | Description |
+| --- | --- |
+| `--source <pptx>` | **(required)** Path to the `.pptx` to critique and improve. |
+| `--template <name>` | **(required)** Saved template (from `~/.deckpilot/templates/`) whose palette/fonts/master style the rebuilt deck. |
+| `--skill <name>` | Optional skill (staged AI instructions, e.g. `story-arc`). |
+| `[project]` | Project name (lower-case kebab). Defaults to `<source-stem>-improved`. |
+| `--model <id>` | LLM model override. |
+| `--token <tok>` | GitHub token (or `COPILOT_GITHUB_TOKEN`). |
+| `--critique-passes <n>` | Preview passes per slide (0 disables; max 5). |
+
+The output brief is capped at **40 slides** (long sources are consolidated).
+The source path is recorded on the project manifest, so a resumed improve
+restores the source plus the `study_source_slides` / `save_improvement_plan`
+tools automatically. If the named template doesn't exist, the command fails
+fast with a hint to create one (`deckpilot template create <name> --from
+<deck.pptx>`). Also available in the TUI: **Improve a deck** on the main menu.
+
+```bash
+deckpilot improve --source deck.pptx --template acme-brand
+deckpilot improve --source deck.pptx --template acme-brand --skill story-arc my-rebuild
 ```
 
 ---
@@ -582,12 +623,13 @@ Precedence at session start: **CLI flag** > **config default** >
 ├── config.json                        # persistent CLI defaults
 ├── projects/
 │   └── <slug>/
-│       ├── project.json               # manifest (created/updated/sessionId/template/model)
+│       ├── project.json               # manifest (created/updated/sessionId/template/model; transform/improve source paths)
 │       ├── brief.json                 # current DeckBrief
 │       ├── slides/
 │       │   └── <id>.slide.ts          # one file per slide with LLM-written code
 │       ├── previews/                  # rendered .png previews from critique passes
 │       ├── critique-usage.json        # { slideId: passesUsed }
+│       ├── IMPROVEMENT-PLAN.md         # improve mode only — the written quality-check plan
 │       └── transcript.jsonl           # append-only chat + tool transcript
 └── templates/
     └── <name>/

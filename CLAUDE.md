@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DeckPilot is a conversational CLI that turns a terminal chat into polished PowerPoint decks, powered by the GitHub Copilot SDK. Inputs include prompts, outlines, markdown, research notes, and structured data; outputs are real `.pptx` files with consistent layouts, speaker notes, themes, and reusable brand templates.
 
-Current version: **v0.17** (see `package.json` for the exact number). This is a mature, fully scaffolded TypeScript/Node project — not a greenfield repo.
+Current version: **v1.0** (see `package.json` for the exact number). This is a mature, fully scaffolded TypeScript/Node project — not a greenfield repo.
 
 ## How it works (architecture)
 
@@ -17,7 +17,7 @@ The two integration points that shape the codebase are settled — keep changes 
 
 ### Repository layout
 
-- `src/commands/` — oclif commands (the CLI surface): `chat`, `start`, `resume`, `menu`, `render`, `auth`, `doctor`, `models`, `version`, plus `config/*`, `project/*`, `template/*`, `skill/*`. Running `deckpilot` with no args opens the TUI menu.
+- `src/commands/` — oclif commands (the CLI surface): `chat`, `start`, `resume`, `transform`, `improve`, `menu`, `render`, `auth`, `doctor`, `models`, `version`, plus `config/*`, `project/*`, `template/*`, `skill/*`. Running `deckpilot` with no args opens the TUI menu.
 - `src/ui/` — ink/React TUI (`RootApp.tsx`, pickers, status bar, streaming message view).
 - `src/template/` — brand-template extraction from donor `.pptx` files: `master-extract.ts` (slide master + cover background), `palette-aggregate.ts`, `donor-geometry.ts`, `from-pptx.ts`/`inspect.ts`/`profile.ts`. The spec + zod schema live in `src/template/spec.ts`.
 - `src/store/` — persistent state under `~/.deckpilot/` (`config.json`, `templates/`, `projects/`, `skills/`) via `paths.ts`.
