@@ -2,6 +2,7 @@ import { Flags } from '@oclif/core';
 import { render } from 'ink';
 import React from 'react';
 import { BaseCommand } from '../cli/base-command.js';
+import { isCopilotOnboarded } from '../store/config.js';
 import { RootApp } from '../ui/RootApp.js';
 
 export default class Menu extends BaseCommand {
@@ -28,11 +29,15 @@ export default class Menu extends BaseCommand {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Menu);
+    // First run (or Copilot never verified) → gate on the readiness screen so
+    // the user confirms Copilot is signed in and ready before their first deck.
+    const onboarded = await isCopilotOnboarded();
     const app = render(
       React.createElement(RootApp, {
         token: flags.token,
         model: flags.model,
         critiquePassesPerSlide: flags['critique-passes'],
+        requireCopilotCheck: !onboarded,
       }),
     );
     await app.waitUntilExit();

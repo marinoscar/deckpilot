@@ -1,9 +1,6 @@
-import { constants, accessSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { constants, accessSync } from 'node:fs';
 import { BaseCommand } from '../cli/base-command.js';
-import { describeTokenSource, resolveGitHubToken } from '../copilot/auth.js';
-import { createClient } from '../copilot/client.js';
+import { checkCopilotSdk, checkGitHubToken } from '../copilot/readiness.js';
 import { isPreviewAvailable } from '../render/pptx-to-pngs.js';
 
 type Check = {
@@ -32,26 +29,7 @@ export default class Doctor extends BaseCommand {
       hint: major >= 22 ? undefined : 'Upgrade Node (try `nvm install 22`).',
     });
 
-    const token = resolveGitHubToken();
-    // The Copilot SDK falls back to the Copilot CLI's keychain when no
-    // explicit GitHub token is on env. Detect that fallback by probing for
-    // ~/.copilot (Linux/macOS/WSL) OR %USERPROFILE%\.copilot (Windows).
-    // Pre-v0.14.6 used process.env.HOME, which is unset on Windows — so the
-    // check incorrectly reported missing even after `copilot login`.
-    const copilotKeychainDir = join(homedir(), '.copilot');
-    const hasCopilotKeychain = existsSync(copilotKeychainDir);
-    checks.push({
-      name: 'GitHub token resolvable',
-      ok: token.source !== 'none' || hasCopilotKeychain,
-      detail:
-        hasCopilotKeychain && token.source === 'none'
-          ? `source: copilot CLI keychain at ${copilotKeychainDir}`
-          : `source: ${describeTokenSource(token.source)}`,
-      hint:
-        token.source === 'none' && !hasCopilotKeychain
-          ? 'Run `deckpilot auth login` (or `copilot login`) to start the device-flow login.'
-          : undefined,
-    });
+    checks.push(checkGitHubToken());
 
     try {
       accessSync(process.cwd(), constants.W_OK);
@@ -65,26 +43,7 @@ export default class Doctor extends BaseCommand {
       });
     }
 
-    let sdkOk = false;
-    let sdkDetail = '';
-    try {
-      const dp = createClient();
-      await dp.start();
-      const pong = await dp.client.ping('deckpilot doctor');
-      sdkOk = !!pong;
-      sdkDetail = `ping ok at ${pong.timestamp}`;
-      await dp.stop();
-    } catch (e) {
-      sdkDetail = `start/ping failed: ${(e as Error).message}`;
-    }
-    checks.push({
-      name: 'Copilot SDK reachable',
-      ok: sdkOk,
-      detail: sdkDetail,
-      hint: sdkOk
-        ? undefined
-        : 'Most likely an auth or entitlement issue. Run `deckpilot auth login`. If you have no Copilot subscription, visit https://github.com/settings/copilot.',
-    });
+    checks.push(await checkCopilotSdk());
 
     // Visual preview pipeline — pure-JS (pptx-glimpse), bundled as a dependency,
     // so it needs no external binaries. Soft check kept for parity/visibility.

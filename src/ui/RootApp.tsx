@@ -5,12 +5,14 @@ import { IMPROVE_DOC_CHAR_BUDGET, IMPROVE_SEED_PROMPT } from '../chat/improve.js
 import { ChatSession } from '../chat/session.js';
 import { TRANSFORM_DOC_CHAR_BUDGET, TRANSFORM_SEED_PROMPT } from '../chat/transform.js';
 import { createClient } from '../copilot/client.js';
+import { markCopilotOnboarded } from '../store/config.js';
 import type { ProjectListEntry } from '../store/projects.js';
 import type { SkillListEntry } from '../store/skills.js';
 import type { TemplateListEntry } from '../store/templates.js';
 import { type TemplateSpec, blankTemplate } from '../template/spec.js';
 import { App as ChatApp } from './App.js';
 import { AuthErrorBanner } from './screens/AuthErrorBanner.js';
+import { CopilotCheck } from './screens/CopilotCheck.js';
 import { Help } from './screens/Help.js';
 import { Improve } from './screens/Improve.js';
 import { MainMenu } from './screens/MainMenu.js';
@@ -33,6 +35,7 @@ type StartOpts = {
 };
 
 type View =
+  | { kind: 'copilot-check' }
   | { kind: 'main' }
   | { kind: 'projects'; mode: 'resume' | 'manage' }
   | { kind: 'templates' }
@@ -51,6 +54,12 @@ type Props = {
   model?: string;
   critiquePassesPerSlide?: number;
   initialView?: View;
+  /**
+   * When true (first run / Copilot never verified), gate on the readiness
+   * screen before the menu. Resolved by the `menu` command from the persisted
+   * onboarding flag so already-verified users start instantly on the menu.
+   */
+  requireCopilotCheck?: boolean;
 };
 
 /**
@@ -62,10 +71,13 @@ export const RootApp: React.FC<Props> = ({
   token,
   model,
   critiquePassesPerSlide,
-  initialView = { kind: 'main' },
+  initialView,
+  requireCopilotCheck = false,
 }) => {
   const { exit } = useApp();
-  const [view, setView] = useState<View>(initialView);
+  const [view, setView] = useState<View>(
+    initialView ?? (requireCopilotCheck ? { kind: 'copilot-check' } : { kind: 'main' }),
+  );
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -148,6 +160,22 @@ export const RootApp: React.FC<Props> = ({
 
   if (view.kind === 'chat') {
     return <ChatApp session={view.session} onExit={() => void endChat()} />;
+  }
+
+  if (view.kind === 'copilot-check') {
+    return (
+      <CopilotCheck
+        token={token}
+        onReady={() => {
+          // Persist so future launches skip the gate; failure to write is
+          // non-fatal (next launch simply re-checks).
+          void markCopilotOnboarded().catch(() => {});
+          setView({ kind: 'main' });
+        }}
+        onContinueAnyway={() => setView({ kind: 'main' })}
+        onQuit={() => exit()}
+      />
+    );
   }
 
   if (view.kind === 'auth-error') {

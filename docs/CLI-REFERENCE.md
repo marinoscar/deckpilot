@@ -112,6 +112,11 @@ Run preflight diagnostics: Node version, Copilot SDK reachable,
 authentication / entitlement, write permissions, the pure-JS slide-preview
 renderer (pptx-glimpse — no external binaries), `$EDITOR` resolution.
 
+The **GitHub token resolvable** and **Copilot signed in & ready** checks are the
+same probes the TUI runs on first launch (see [`deckpilot
+menu`](#deckpilot-menu)), so the CLI and TUI never disagree about whether
+Copilot is ready.
+
 ```bash
 deckpilot doctor
 ```
@@ -161,6 +166,18 @@ deckpilot improve --source deck.pptx --template acme-brand --skill story-arc my-
 
 Open the interactive TUI menu explicitly. This is what `deckpilot` (with no
 args) does, so you rarely need to type `menu`.
+
+**First-run readiness check.** The first time you open the menu (or any time
+Copilot has never been verified on this machine), DeckPilot gates on a quick
+readiness screen before the menu: it confirms a GitHub token is resolvable
+(env var or the Copilot CLI keychain) and **pings the Copilot SDK** — a
+successful pong proves you're signed in, Copilot-entitled, and the service is
+reachable. On failure it shows one clear next step (`deckpilot auth login`)
+with **r recheck · c continue anyway · q quit**; on success it advances to the
+menu and records the result (in `~/.deckpilot/config.json`) so later launches
+start straight on the menu. An expired credential later on is still caught at
+chat start by the auth banner. These are the same checks as [`deckpilot
+doctor`](#deckpilot-doctor).
 
 ```bash
 deckpilot menu

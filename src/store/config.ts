@@ -46,10 +46,22 @@ const DefaultsSchema = z
   })
   .strict();
 
+/**
+ * One-time onboarding state. Not user-settable via `config set` — written
+ * programmatically (e.g. once the TUI first-run Copilot readiness check passes).
+ */
+const OnboardingSchema = z
+  .object({
+    /** Set true after the first-run Copilot readiness gate has passed once. */
+    copilotReady: z.boolean().default(false),
+  })
+  .strict();
+
 export const ConfigSchema = z
   .object({
     schemaVersion: z.literal('1.0').default('1.0'),
     defaults: DefaultsSchema.default({}),
+    onboarding: OnboardingSchema.default({ copilotReady: false }),
   })
   .strict();
 
@@ -158,6 +170,7 @@ export function setConfigValue(cfg: Config, key: string, value: string): Config 
   const next: Config = {
     schemaVersion: cfg.schemaVersion,
     defaults: { ...cfg.defaults },
+    onboarding: { ...cfg.onboarding },
   };
   const [, tail] = canonical.split('.');
   let coerced: unknown = value;
@@ -188,8 +201,30 @@ export function unsetConfigValue(cfg: Config, key: string): Config {
   const next: Config = {
     schemaVersion: cfg.schemaVersion,
     defaults: { ...cfg.defaults },
+    onboarding: { ...cfg.onboarding },
   };
   const [, tail] = canonical.split('.');
   delete (next.defaults as Record<string, unknown>)[tail];
   return ConfigSchema.parse(next);
+}
+
+/**
+ * Has the first-run Copilot readiness gate already passed once? Reads the
+ * persisted onboarding flag, defaulting to `false` (show the gate) on any
+ * read error so a corrupt/absent config never silently skips the check.
+ */
+export async function isCopilotOnboarded(): Promise<boolean> {
+  try {
+    const cfg = await loadConfig();
+    return cfg.onboarding.copilotReady === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Record that Copilot has been verified ready, so future launches skip the gate. */
+export async function markCopilotOnboarded(): Promise<void> {
+  const cfg = await loadConfig();
+  if (cfg.onboarding.copilotReady) return;
+  await saveConfig({ ...cfg, onboarding: { ...cfg.onboarding, copilotReady: true } });
 }
