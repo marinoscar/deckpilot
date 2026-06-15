@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DeckPilot is a conversational CLI that turns a terminal chat into polished PowerPoint decks, powered by the GitHub Copilot SDK. Inputs include prompts, outlines, markdown, research notes, and structured data; outputs are real `.pptx` files with consistent layouts, speaker notes, themes, and reusable brand templates.
 
-Current version: **v1.0** (see `package.json` for the exact number). This is a mature, fully scaffolded TypeScript/Node project — not a greenfield repo.
+Current version: **v1.2** (see `package.json` for the exact number). This is a mature, fully scaffolded TypeScript/Node project — not a greenfield repo.
 
 ## How it works (architecture)
 
@@ -27,7 +27,7 @@ The two integration points that shape the codebase are settled — keep changes 
 
 ### Toolchain
 
-- TypeScript (ESM, Node ≥20), oclif command framework, ink/React TUI, zod for schemas.
+- TypeScript (ESM, Node ≥22), oclif command framework, ink/React TUI, zod for schemas.
 - `npm run build` (tsc) · `npm test` (vitest) · `npm run lint` / `npm run format` (biome) · `npm run dev` (tsx) · `npm run manifest` (oclif).
 
 ## Versioning & documentation maintenance
