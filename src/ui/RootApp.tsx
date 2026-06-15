@@ -13,6 +13,7 @@ import { type TemplateSpec, blankTemplate } from '../template/spec.js';
 import { App as ChatApp } from './App.js';
 import { AuthErrorBanner } from './screens/AuthErrorBanner.js';
 import { CopilotCheck } from './screens/CopilotCheck.js';
+import { Doctor } from './screens/Doctor.js';
 import { Help } from './screens/Help.js';
 import { Improve } from './screens/Improve.js';
 import { MainMenu } from './screens/MainMenu.js';
@@ -45,6 +46,7 @@ type View =
   | { kind: 'transform' }
   | { kind: 'improve' }
   | { kind: 'settings' }
+  | { kind: 'doctor' }
   | { kind: 'help' }
   | { kind: 'chat'; session: ChatSession }
   | { kind: 'auth-error'; message: string; retry: () => Promise<void> };
@@ -213,6 +215,9 @@ export const RootApp: React.FC<Props> = ({
             case 'settings':
               setView({ kind: 'settings' });
               return;
+            case 'doctor':
+              setView({ kind: 'doctor' });
+              return;
             case 'help':
               setView({ kind: 'help' });
               return;
@@ -310,6 +315,10 @@ export const RootApp: React.FC<Props> = ({
 
   if (view.kind === 'settings') {
     return <Settings onBack={back} />;
+  }
+
+  if (view.kind === 'doctor') {
+    return <Doctor token={token} onBack={back} />;
   }
 
   if (view.kind === 'help') {

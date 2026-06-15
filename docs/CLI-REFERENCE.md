@@ -121,6 +121,11 @@ Copilot is ready.
 deckpilot doctor
 ```
 
+The same diagnostics are also available inside the TUI: pick **Doctor** (`d`)
+from the main menu to run them without leaving the menu (`r` to recheck, `b`/Esc
+to go back). The CLI command and the menu screen share one implementation, so
+they always report the same checks.
+
 ---
 
 ### `deckpilot improve`
@@ -182,6 +187,12 @@ doctor`](#deckpilot-doctor).
 ```bash
 deckpilot menu
 ```
+
+The menu lists every feature with a letter shortcut: Start (`s`), Transform
+(`x`), Improve (`i`), Resume (`r`), Manage projects (`p`), Manage templates
+(`t`), Manage skills (`k`), Settings (`g`), **Doctor (`d`)**, Help (`h`), and
+Quit (`q`). Doctor runs the [`deckpilot doctor`](#deckpilot-doctor) diagnostics
+in place.
 
 ---
 

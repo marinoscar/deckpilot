@@ -16,6 +16,7 @@ export type MainChoice =
   | 'templates'
   | 'skills'
   | 'settings'
+  | 'doctor'
   | 'help'
   | 'quit';
 
@@ -121,6 +122,12 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
       label: 'Settings',
       detail: 'Defaults, critique budget, paths',
       hotkey: 'g',
+    },
+    {
+      value: 'doctor',
+      label: 'Doctor',
+      detail: 'Preflight diagnostics: Node, auth, Copilot SDK, preview',
+      hotkey: 'd',
     },
     {
       value: 'help',
