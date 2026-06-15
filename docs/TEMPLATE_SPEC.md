@@ -23,7 +23,8 @@ field and follow lower-case kebab rules (`[a-z0-9-]+`).
 #    vision, and authors a rich TemplateSpec — palette, fonts, tone, voice,
 #    copyRules, plus a dense `guidance` field with quoted observations
 #    ("covers are full-bleed photography with a single-line title
-#    bottom-left in 56pt geometric sans"). Needs LibreOffice + Copilot auth.
+#    bottom-left in 56pt geometric sans"). Needs Copilot auth; previews are
+#    pure-JS (pptx-glimpse) — no LibreOffice or other system packages.
 deckpilot template create acme-corp --from ./brand.pptx
 
 # 2. Shallow OOXML-only extraction from a .pptx

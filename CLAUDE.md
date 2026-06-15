@@ -13,7 +13,7 @@ Current version: **v1.0** (see `package.json` for the exact number). This is a m
 The two integration points that shape the codebase are settled — keep changes consistent with these decisions rather than reinventing them:
 
 1. **GitHub Copilot SDK** (`src/copilot/`) drives the conversation. `chat/session.ts` orchestrates the turn loop, `chat/system-prompt.ts` assembles the system prompt (base instructions + template voice/guidance + skills), `chat/slash.ts` handles slash commands. The LLM produces a structured plan and then **authors per-slide code**, rather than DeckPilot hard-coding layouts.
-2. **PowerPoint generation is code-gen over `pptxgenjs`.** The LLM writes per-slide TypeScript against a frozen API surface (`src/render/slide-api.ts`), executed in a `vm` sandbox (`src/render/sandbox.ts`); `src/render/renderer.ts` emits the `.pptx`. Previews are rendered to PNGs via LibreOffice (`src/render/pptx-to-pngs.ts`, `preview.ts`) so the model can look at its output and revise. All PPTX emission stays centralized behind this path — layouts/themes/templates are **data**, not scattered code.
+2. **PowerPoint generation is code-gen over `pptxgenjs`.** The LLM writes per-slide TypeScript against a frozen API surface (`src/render/slide-api.ts`), executed in a `vm` sandbox (`src/render/sandbox.ts`); `src/render/renderer.ts` emits the `.pptx`. Previews are rendered to PNGs with the pure-JS `pptx-glimpse` library (`src/render/pptx-to-pngs.ts`, `preview.ts`) — no LibreOffice or other external binaries — so the model can look at its output and revise. All PPTX emission stays centralized behind this path — layouts/themes/templates are **data**, not scattered code.
 
 ### Repository layout
 
