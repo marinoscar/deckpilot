@@ -49,6 +49,17 @@ export function builtinSkillsRoot(): string {
   return join(here, '..', '..', 'skills');
 }
 
+/**
+ * Read-only fonts bundled with the package, resolved the same way as
+ * `builtinSkillsRoot()`. These are opentype.js-safe substitutes (Noto Sans /
+ * Noto Serif) the preview rasteriser falls back to when the host lacks a safe
+ * copy of the requested brand font — see `src/render/pptx-to-pngs.ts`.
+ */
+export function builtinFontsRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', '..', 'assets', 'fonts');
+}
+
 export function configFile(): string {
   return join(homeRoot(), 'config.json');
 }

@@ -57,6 +57,14 @@ export type DeckToolContext = {
   critiquePassesPerSlide: () => number;
   consumeCritiquePass: (slideId: string) => { remaining: number; allowed: boolean };
   /**
+   * Whether previews have been disabled for the rest of this session after an
+   * infrastructure-level render failure. Set the first time the rasteriser
+   * throws so we don't re-run the (slow) failing pipeline on every slide. The
+   * stored string is the underlying failure reason (or null when previews work).
+   */
+  previewFailureReason: () => string | null;
+  notePreviewUnavailable: (reason: string) => void;
+  /**
    * Copy a rendered preview PNG into the project (or tmpdir in ephemeral
    * mode) and push a `preview` transcript entry so the user sees a
    * clickable file:// link. Returns the saved absolute path.
@@ -111,6 +119,17 @@ const WriteSlideCodeArgs = z.object({
       'JavaScript/TypeScript that draws this slide. May be either (a) a function declaration `function render(slide, theme, helpers) { ... }`, or (b) bare statements that call slide methods directly. See the system prompt for the API surface.',
     ),
 });
+
+/**
+ * Guidance returned when the PNG preview can't be produced for infrastructure
+ * reasons (the rasteriser threw). Frames it as an environment issue, not a
+ * code defect, so the model keeps building blind instead of thrashing on the
+ * slide or giving up. Used both at first failure and on the per-session
+ * short-circuit for subsequent slides.
+ */
+function previewUnavailableGuidance(reason: string): string {
+  return `The visual preview is unavailable in this environment (${reason}). This is an infrastructure issue, not a problem with your slide code — keep building the remaining slides without previews and call save_deck / render_deck at the end. Further preview attempts this session are skipped to avoid repeating the failure.`;
+}
 
 export function buildDeckTools(ctx: DeckToolContext): Tool[] {
   // `defineTool` returns Tool<TArgs>; the SDK's createSession expects
@@ -194,6 +213,17 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
         // another write_slide_code call always sees the latest state.
         ctx.setSlideCode(args.slideId, args.code);
 
+        // If a previous slide already proved the rasteriser is broken in this
+        // environment, short-circuit before consuming a critique pass or
+        // re-running the (slow) failing pipeline.
+        const priorFailure = ctx.previewFailureReason();
+        if (priorFailure) {
+          return {
+            textResultForLlm: `Slide code stored for "${args.slideId}". ${previewUnavailableGuidance(priorFailure)}`,
+            resultType: 'success' as const,
+          };
+        }
+
         // Critique budget check — also gates whether we run the preview.
         const passes = ctx.critiquePassesPerSlide();
         if (passes <= 0) {
@@ -241,10 +271,10 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           };
         } catch (e) {
           if (e instanceof PreviewUnavailableError) {
+            ctx.notePreviewUnavailable(e.message);
             return {
-              textResultForLlm: `Slide code stored, but preview failed: ${e.message}`,
-              resultType: 'failure' as const,
-              error: 'preview_unavailable',
+              textResultForLlm: `Slide code stored for "${args.slideId}". ${previewUnavailableGuidance(e.message)}`,
+              resultType: 'success' as const,
             };
           }
           if (e instanceof SlideCodeError) {
@@ -294,6 +324,15 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
             textResultForLlm: `Slide "${args.slideId}" has no code yet. Write it with write_slide_code first.`,
             resultType: 'failure' as const,
             error: 'no_slide_code',
+          };
+        }
+
+        const priorFailure = ctx.previewFailureReason();
+        if (priorFailure) {
+          return {
+            textResultForLlm: previewUnavailableGuidance(priorFailure),
+            resultType: 'failure' as const,
+            error: 'preview_unavailable',
           };
         }
 
@@ -347,8 +386,9 @@ export function buildDeckTools(ctx: DeckToolContext): Tool[] {
           };
         } catch (e) {
           if (e instanceof PreviewUnavailableError) {
+            ctx.notePreviewUnavailable(e.message);
             return {
-              textResultForLlm: e.message,
+              textResultForLlm: previewUnavailableGuidance(e.message),
               resultType: 'failure' as const,
               error: 'preview_unavailable',
             };

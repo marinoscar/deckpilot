@@ -50,6 +50,8 @@ function makeCtx(outputPath: string): DeckToolContext {
     getActiveTemplateName: () => undefined,
     critiquePassesPerSlide: () => 0,
     consumeCritiquePass: () => ({ remaining: 0, allowed: false }),
+    previewFailureReason: () => null,
+    notePreviewUnavailable: () => {},
     recordPreview: async () => ({ pngPath: '', pass: 0 }),
   };
 }

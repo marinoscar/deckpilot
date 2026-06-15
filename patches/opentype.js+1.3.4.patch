@@ -1,0 +1,24 @@
+diff --git a/node_modules/opentype.js/dist/opentype.js b/node_modules/opentype.js/dist/opentype.js
+index 0499d3f..aaaa4f7 100644
+--- a/node_modules/opentype.js/dist/opentype.js
++++ b/node_modules/opentype.js/dist/opentype.js
+@@ -12339,11 +12339,14 @@
+ 	                this$1, [glyphIndex, subtable]
+ 	            ); };
+ 	        default:
+-	            throw new Error(
+-	                "lookupType: " + (lookupTable.lookupType) + " - " +
+-	                "substFormat: " + (subtable.substFormat) + " " +
+-	                "is not yet supported"
+-	            );
++	            // DeckPilot patch (patch-package): some modern fonts (Calibri,
++	            // Carlito, Arial, …) carry GSUB lookupType 7 / unsupported subst
++	            // formats. Upstream throws here and aborts the whole render. Return
++	            // a no-op instead so the unsupported feature is skipped: callers
++	            // (lookupFeature, chainingSubstitutionFormat3) only invoke the
++	            // returned method for known subst types, so this is never called —
++	            // it just keeps getLookupMethod from throwing.
++	            return function () { return null; };
+ 	    }
+ 	};
+ 

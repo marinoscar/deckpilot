@@ -135,6 +135,13 @@ export class ChatSession {
 
   private critiquePasses = 3;
   private critiqueUsage = new Map<string, number>();
+  /**
+   * Set the first time the PNG rasteriser fails for infrastructure reasons
+   * (e.g. an unsupported font on this host). Subsequent preview calls
+   * short-circuit on it instead of re-running the slow, failing pipeline.
+   * Session-scoped only — not persisted, so a reinstall/fix is picked up next run.
+   */
+  private previewFailureReason: string | null = null;
 
   private styleGuide: ProjectStyleGuide | null = null;
 
@@ -573,6 +580,10 @@ export class ChatSession {
       getSkillStage: (stage) => this.resolvedSkill?.instructions[stage] ?? null,
       critiquePassesPerSlide: () => this.critiquePasses,
       consumeCritiquePass: (id) => this.consumeCritiquePass(id),
+      previewFailureReason: () => this.previewFailureReason,
+      notePreviewUnavailable: (reason) => {
+        if (!this.previewFailureReason) this.previewFailureReason = reason;
+      },
       recordPreview: (slideId, sourcePath) => this.recordPreview(slideId, sourcePath),
     };
   }

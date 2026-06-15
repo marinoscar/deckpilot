@@ -7,26 +7,46 @@
  *
  * Pipeline: pure-JS via `pptx-glimpse` (renders text through opentype.js to
  * SVG, then rasterises to PNG). No external binaries — no LibreOffice, no
- * poppler — so previews work out of the box on Windows and Linux. Fonts are
- * resolved from the OS font directories pptx-glimpse scans; missing brand
- * fonts fall back via the mapping below (the generated .pptx itself always
- * carries the correct font names — only the preview is approximate).
+ * poppler — so previews work out of the box on Windows and Linux.
+ *
+ * Fonts: opentype.js (pptx-glimpse's shaper) throws on GSUB lookupType 7
+ * ("Extension Substitution"), which modern Windows fonts (Calibri, Arial,
+ * Cambria, Segoe UI, Carlito) all carry — and stock Windows ships no safe
+ * substitute, so the OS font scan alone breaks every preview there. We guard
+ * this two ways: (1) bundle opentype.js-safe fonts (Noto Sans / Noto Serif)
+ * and route the common brand/system fonts to them via the mapping below, with
+ * the bundled dir searched first; (2) if a render still throws, retry once
+ * with `skipSystemFonts` so opentype.js only ever sees the bundled fonts. The
+ * generated .pptx itself always carries the correct font names — only the
+ * preview is approximate.
  */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { convertPptxToPng } from 'pptx-glimpse';
+import { builtinFontsRoot } from '../store/paths.js';
 
 /**
  * Substitutes for the fonts DeckPilot themes commonly request, so previews
- * stay legible on hosts that don't ship them. Merged on top of pptx-glimpse's
- * own DEFAULT_FONT_MAPPING (Calibri→Carlito, etc.), so we only add brand fonts.
+ * stay legible — and so opentype.js never trips on a lookupType-7 font (see
+ * file header). Merged on top of pptx-glimpse's own DEFAULT_FONT_MAPPING
+ * (Calibri→Carlito), which we deliberately override: Carlito is rarely
+ * installed and recent builds also carry lookupType 7. Targets resolve to the
+ * bundled Noto fonts (searched ahead of OS fonts), which are verified safe.
  */
 const FONT_MAPPING: Record<string, string> = {
   Inter: 'Noto Sans',
   'Inter Tight': 'Noto Sans',
-  Arial: 'Liberation Sans',
-  Helvetica: 'Liberation Sans',
+  Arial: 'Noto Sans',
+  Helvetica: 'Noto Sans',
+  Calibri: 'Noto Sans',
+  'Calibri Light': 'Noto Sans',
+  'Segoe UI': 'Noto Sans',
+  Tahoma: 'Noto Sans',
+  Verdana: 'Noto Sans',
+  Cambria: 'Noto Serif',
+  'Times New Roman': 'Noto Serif',
+  Georgia: 'Noto Serif',
 };
 
 /** Slide width in inches for a 16:9 deck (see slide-api.ts SLIDE dims). */
@@ -94,16 +114,31 @@ export async function pptxToPngs(
   const width = Math.round(SLIDE_WIDTH_IN * dpi);
 
   const buf = await readFile(pptxPath);
+  const bundledFonts = builtinFontsRoot();
+  const fontMapping = { ...FONT_MAPPING, ...(opts.fontMapping ?? {}) };
   let results: Awaited<ReturnType<typeof convertPptxToPng>>;
   try {
+    // Bundled safe fonts first, then any caller dirs, then the OS scan.
     results = await convertPptxToPng(buf, {
       width,
       logLevel: 'warn',
-      fontMapping: { ...FONT_MAPPING, ...(opts.fontMapping ?? {}) },
-      ...(opts.fontDirs ? { fontDirs: opts.fontDirs } : {}),
+      fontMapping,
+      fontDirs: [bundledFonts, ...(opts.fontDirs ?? [])],
     });
-  } catch (e) {
-    throw new PreviewUnavailableError(`pptx-glimpse render failed: ${(e as Error).message}`);
+  } catch {
+    // Most likely an OS font tripped opentype.js (lookupType 7). Retry using
+    // only the bundled safe fonts, with the OS scan disabled entirely.
+    try {
+      results = await convertPptxToPng(buf, {
+        width,
+        logLevel: 'warn',
+        fontMapping,
+        fontDirs: [bundledFonts],
+        skipSystemFonts: true,
+      });
+    } catch (e) {
+      throw new PreviewUnavailableError(`pptx-glimpse render failed: ${(e as Error).message}`);
+    }
   }
 
   if (results.length === 0) {
