@@ -58,7 +58,7 @@ export const SlashMenu: React.FC<Props> = ({ query, selectedIndex, onResolve }) 
         const sel = realIndex === selectedIndex;
         return (
           <Box key={cmd.name}>
-            <Text color={sel ? `${ACCENT}Bright` : 'gray'}>{sel ? '› ' : '  '}</Text>
+            <Text color={sel ? ACCENT : 'gray'}>{sel ? '› ' : '  '}</Text>
             <Text color={sel ? 'white' : ACCENT} bold={sel}>
               {slashLabel(cmd).padEnd(labelWidth)}
             </Text>
