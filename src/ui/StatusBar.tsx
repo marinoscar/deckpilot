@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import type React from 'react';
+import { useEffect, useState } from 'react';
 import type { SaveState } from '../chat/session.js';
 
 type Props = {
@@ -10,6 +11,25 @@ type Props = {
   saveState?: SaveState | null;
   hint?: string;
 };
+
+/** Always-visible key hints (row A of the footer). */
+const KEY_HINTS = '/ commands · @ files · ⏎ send · \\ + ⏎ newline · esc interrupt · /help';
+
+/** Rotating feature tips (row B of the footer) — teaches the surface over time. */
+const TIPS = [
+  'type / to see every command, then ↑/↓ and Enter to run one',
+  '@ inserts a workspace file path so the model can reference it',
+  '/doc attaches a .txt/.md/.pptx/.docx as text context for your next message',
+  '/image attaches pictures the model can actually see',
+  '/template <name> applies a saved brand template mid-session',
+  '/render writes the current deck to a .pptx in this folder',
+  '/save renames the project; decks autosave to ~/.deckpilot/ already',
+  'end a line with \\ then Enter for a multi-line message; Enter alone sends',
+  '/critique <id> makes the agent re-preview and polish one slide',
+  'resume any deck later with: deckpilot resume <name>',
+];
+
+const TIP_MS = 6000;
 
 export const StatusBar: React.FC<Props> = ({
   status,
@@ -46,6 +66,14 @@ export const StatusBar: React.FC<Props> = ({
           ? 'saved'
           : 'idle';
 
+  const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * TIPS.length));
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTipIndex((i) => (i + 1) % TIPS.length);
+    }, TIP_MS);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <Box flexDirection="column">
       <Box>
@@ -75,9 +103,10 @@ export const StatusBar: React.FC<Props> = ({
         ) : null}
       </Box>
       <Box>
-        <Text dimColor>
-          {hint ?? '⏎ send · \\ + ⏎ newline · esc interrupt · double Ctrl+C exits · /help'}
-        </Text>
+        <Text dimColor>{hint ?? KEY_HINTS}</Text>
+      </Box>
+      <Box>
+        <Text dimColor>💡 Tip: {TIPS[tipIndex]}</Text>
       </Box>
     </Box>
   );

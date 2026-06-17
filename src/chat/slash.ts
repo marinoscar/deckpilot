@@ -80,36 +80,103 @@ export function parseSlash(input: string): SlashParseResult {
   return { kind } as SlashCommand;
 }
 
+/**
+ * Per-command metadata — the single source of truth that drives the `/`
+ * autocomplete dropdown, the tips footer, and the generated HELP_TEXT below.
+ * Keep this in sync with the SlashCommand union + KNOWN map above (and the
+ * `/image`/`/doc` pickers, which are handled in the prompt rather than
+ * parseSlash but still belong in the menu).
+ */
+export type SlashCommandMeta = {
+  /** Canonical command name, without the leading slash (e.g. 'render'). */
+  name: string;
+  /** Alternative names that resolve to the same command (e.g. ['?'] for help). */
+  aliases?: string[];
+  /** Argument hint shown after the name; its presence means "takes arguments". */
+  args?: string;
+  /** One-line description shown in the dropdown and HELP_TEXT. */
+  summary: string;
+};
+
+export const SLASH_COMMANDS: SlashCommandMeta[] = [
+  { name: 'help', aliases: ['?'], summary: 'Show this help' },
+  { name: 'outline', summary: 'Compact outline of the current brief (titles + purposes)' },
+  { name: 'show', summary: 'Full DeckBrief as JSON' },
+  {
+    name: 'render',
+    args: '[path]',
+    summary: 'Render the current deck to .pptx (default: ./<title>.pptx)',
+  },
+  { name: 'save', args: '[name]', summary: 'Force-flush autosave (optionally rename the project)' },
+  { name: 'load', args: '<path>', summary: 'Load a previously-saved .brief.json into the project' },
+  {
+    name: 'project',
+    args: '[name]',
+    summary: 'Show the current project name + path, or rename it',
+  },
+  { name: 'templates', summary: 'List every saved named template' },
+  {
+    name: 'template',
+    args: '[name|path|none]',
+    summary: 'Show, switch, one-shot inherit, or clear the template',
+  },
+  {
+    name: 'critique',
+    args: '<id>',
+    summary: 'Force the LLM to re-preview a slide (resets its budget)',
+  },
+  {
+    name: 'critique-passes',
+    args: '<n>',
+    summary: 'Set how many preview passes per slide (0 disables, max 5)',
+  },
+  { name: 'style-guide', summary: 'Show the active DECKPILOT.md (or note none was found)' },
+  {
+    name: 'image',
+    aliases: ['img'],
+    summary: 'Attach image files as visual references (multi-select)',
+  },
+  {
+    name: 'doc',
+    aliases: ['docs'],
+    summary: 'Attach document files as text context (multi-select)',
+  },
+  { name: 'undo', summary: 'Roll back the most recent deck change' },
+  { name: 'clear', summary: 'Clear the transcript (keep the deck)' },
+  { name: 'new', summary: 'Clear the transcript and decouple from the project' },
+  { name: 'model', args: '[id]', summary: 'Show the current LLM model, or switch it' },
+  { name: 'models', summary: 'List available models' },
+  { name: 'quit', aliases: ['exit'], summary: 'Exit DeckPilot' },
+];
+
+/** Full left-hand label for a command, e.g. `/save, /s [name]`. */
+export function slashLabel(cmd: SlashCommandMeta): string {
+  const names = [cmd.name, ...(cmd.aliases ?? [])].map((n) => `/${n}`).join(', ');
+  return cmd.args ? `${names} ${cmd.args}` : names;
+}
+
+/**
+ * Commands whose name or any alias starts with `query` (case-insensitive).
+ * `query` is the text after the leading `/` (may be empty → all commands).
+ */
+export function filterSlashCommands(query: string): SlashCommandMeta[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return SLASH_COMMANDS;
+  return SLASH_COMMANDS.filter((cmd) =>
+    [cmd.name, ...(cmd.aliases ?? [])].some((n) => n.toLowerCase().startsWith(q)),
+  );
+}
+
+/** The aligned "Slash commands:" block, generated from SLASH_COMMANDS. */
+const COMMAND_LIST = (() => {
+  const labels = SLASH_COMMANDS.map(slashLabel);
+  const width = Math.max(...labels.map((l) => l.length));
+  return SLASH_COMMANDS.map((cmd, i) => `  ${labels[i].padEnd(width)}  ${cmd.summary}`).join('\n');
+})();
+
 export const HELP_TEXT = `
 Slash commands:
-  /help, /?           Show this help
-  /outline            Compact outline of the current brief (titles + purposes)
-  /show               Full DeckBrief as JSON
-  /render [path]      Render the current deck to .pptx (default: ./<title>.pptx)
-  /save               Force-flush autosave (the deck saves to ~/.deckpilot/ automatically)
-  /save <name>        Rename the current project + flush
-  /load <path>        Load a previously-saved .brief.json into the current project
-  /project            Show the current project name + path
-  /project <name>     Rename the current project on disk
-  /templates          List every saved named template (under ~/.deckpilot/templates/)
-  /template           Show the currently-applied template
-  /template <name>    Switch to a different saved template
-  /template <path>    Inherit theme + fonts one-shot from a .pptx (no save)
-  /template none      Clear the active template
-  /critique <id>      Force the LLM to re-preview a specific slide (resets its budget)
-  /critique-passes <n>  Set how many preview passes per slide (0 disables, max 5)
-  /style-guide        Show the active DECKPILOT.md (or note that none was found)
-  /image, /img        Pick image files from this folder to attach to your next
-                      message as visual references the model can see (multi-select)
-  /doc, /docs         Pick document files (.txt/.md/.pptx/.docx) from this folder
-                      to attach as text context for your next message (multi-select)
-  /undo               Roll back the most recent deck change
-  /clear              Clear the transcript (keep the deck)
-  /new                Clear the transcript and decouple from the current project
-  /model              Show the current LLM model
-  /model <id>         Switch model (history preserved by the SDK)
-  /models             List available models
-  /quit, /exit        Exit DeckPilot
+${COMMAND_LIST}
 
 Decks autosave to ~/.deckpilot/projects/<name>/ every few seconds. Resume any
 saved project anywhere with: deckpilot resume <name>. Run "deckpilot" with no

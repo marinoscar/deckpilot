@@ -327,9 +327,51 @@ deckpilot start my-pitch --skill story-arc
 deckpilot start --model gpt-5 --critique-passes 5
 ```
 
+#### In-chat: slash-command autocomplete
+
+Start a line with `/` and an autocomplete dropdown opens above the prompt,
+listing every slash command with its argument hint and a one-line description,
+filtered by what you type (`/te` narrows to `/template` / `/templates`). It is
+driven by a single command registry in `src/chat/slash.ts`, so it always matches
+`/help` and the table above.
+
+| Key | Action (while the menu is open) |
+| --- | --- |
+| `↑` / `↓` | Move the highlight. |
+| `Tab` | Complete the highlighted command into the prompt (adds a trailing space when it takes an argument). |
+| `Enter` | Run a no-argument command immediately; for a command that takes an argument, fill it in (`/render `, `/template `, …) and keep editing. |
+| `Esc` | Dismiss the menu without clearing what you typed. |
+| typing | Keeps filtering; a space (start of an argument) closes the menu. |
+
+Below the prompt, a two-line footer doubles as a cheat-sheet: a fixed
+key-hints row (`/ commands · @ files · ⏎ send · …`) and a rotating `💡 Tip:`
+line that surfaces a different feature every few seconds.
+
+#### In-chat: referencing files with `@`
+
+Type `@` at the start of a word to open a paged picker of **every file in the
+working folder**, sorted newest-first. It shows **5 files per page**; a **Show
+more…** row advances to the next page (`page X/Y`, wrapping to the first after
+the last), and a **Type a path…** row always sits at the end for files outside
+the folder. The chosen path is inserted into the prompt text (with a trailing
+space) — it's a *path reference* for the model, not an attachment (use `/doc` or
+`/image` to pull a file's contents in).
+
+| Key | Action (while the `@` picker is open) |
+| --- | --- |
+| typing | Filters the list by substring; resets to page 1. |
+| `↑` / `↓` | Move the highlight across files, **Show more…**, and **Type a path…**. |
+| `Enter` | Insert the highlighted file's path; on **Show more…** page forward; on **Type a path…** switch to free-form path entry. |
+| `Enter` (path entry) | Insert the typed path verbatim (absolute or relative — any file on disk). |
+| `Esc` | In path entry, return to the list; in the list, close the picker and drop the `@`. |
+
+The paging math lives in `pickerLayout()` (`src/util/files.ts`), shared with the
+Transform/Improve deck picker so the two behave identically.
+
 #### In-chat: editing & keyboard
 
-The prompt is a rounded input box with a movable block caret. Keys:
+The prompt is a rounded input box with a movable block caret. Keys (when the
+slash-command menu above is **not** open):
 
 | Key | Action |
 | --- | --- |

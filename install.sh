@@ -33,7 +33,7 @@ set -euo pipefail
 
 # Bumped on every release of the installer. Printed at the top of every run so
 # users can confirm what they're actually executing (CDN cache misses are real).
-INSTALL_SCRIPT_VERSION="1.2.3"
+INSTALL_SCRIPT_VERSION="1.3.1"
 
 # NOTE: do NOT redirect bash's own stdin here. Under `curl ... | bash`, bash IS
 # reading the script from stdin. Redirecting stdin at the top would make bash

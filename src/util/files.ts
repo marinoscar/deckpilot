@@ -20,8 +20,11 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
 /** Document formats whose text can be extracted (used by the `/doc` picker). */
 export const DOCUMENT_EXT = /\.(txt|md|markdown|pptx|docx)$/i;
 
+/** Matches any file — used by the `@` picker's "all files in the folder" mode. */
+const ANY_FILE = /.+/;
+
 /** Which file set the workspace scan surfaces. */
-export type ScanKinds = 'default' | 'images' | 'documents';
+export type ScanKinds = 'default' | 'images' | 'documents' | 'all';
 
 /** Max reference images stageable per turn, and max bytes per image. */
 export const MAX_ATTACHED_IMAGES = 8;
@@ -95,7 +98,13 @@ export async function scanWorkspaceFiles(
   const max = opts.max ?? 200;
   const out: FileEntry[] = [];
   const match =
-    opts.kinds === 'images' ? IMAGE_EXT : opts.kinds === 'documents' ? DOCUMENT_EXT : INTERESTING;
+    opts.kinds === 'images'
+      ? IMAGE_EXT
+      : opts.kinds === 'documents'
+        ? DOCUMENT_EXT
+        : opts.kinds === 'all'
+          ? ANY_FILE
+          : INTERESTING;
   await walk(dir, dir, out, max, opts.recursive ?? false, match);
   out.sort((a, b) => b.mtime - a.mtime);
   return out.slice(0, max);
@@ -161,6 +170,38 @@ export function filterFiles(files: FileEntry[], query: string): FileEntry[] {
   const q = query.trim().toLowerCase();
   if (!q) return files;
   return files.filter((f) => f.path.toLowerCase().includes(q) || f.name.toLowerCase().includes(q));
+}
+
+/** How many files a paged picker shows before the "Show more…" row. */
+export const PICKER_PAGE_SIZE = 5;
+
+/**
+ * Row layout for a paged picker over `total` items on a given `page`: the
+ * visible file slice plus the indices of the trailing "Show more…" (only when
+ * there's more than one page worth) and the always-present "Type a path…" row.
+ * Shared by the `@` picker's navigation (Prompt) and its render (FilePicker) so
+ * the two never disagree. Mirrors the inline math in `PptxPickStep`.
+ */
+export function pickerLayout(
+  total: number,
+  page: number,
+): {
+  pageCount: number;
+  pageStart: number;
+  pageLen: number;
+  hasMore: boolean;
+  showMoreIndex: number;
+  manualIndex: number;
+  count: number;
+} {
+  const pageCount = Math.max(1, Math.ceil(total / PICKER_PAGE_SIZE));
+  const pageStart = page * PICKER_PAGE_SIZE;
+  const pageLen = Math.min(PICKER_PAGE_SIZE, Math.max(0, total - pageStart));
+  const hasMore = total > PICKER_PAGE_SIZE;
+  const showMoreIndex = hasMore ? pageLen : -1;
+  const manualIndex = pageLen + (hasMore ? 1 : 0);
+  const count = manualIndex + 1;
+  return { pageCount, pageStart, pageLen, hasMore, showMoreIndex, manualIndex, count };
 }
 
 export function humanSize(bytes: number): string {

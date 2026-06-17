@@ -1,10 +1,12 @@
 import { basename } from 'node:path';
 import { Box, Text, useInput } from 'ink';
 import type React from 'react';
-import { useCallback, useRef, useState } from 'react';
-import { type FileEntry, toggleDocument, toggleImage } from '../util/files.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { SlashCommandMeta } from '../chat/slash.js';
+import { type FileEntry, pickerLayout, toggleDocument, toggleImage } from '../util/files.js';
 import { CaretLine } from './CaretLine.js';
 import { FilePicker } from './FilePicker.js';
+import { SlashMenu } from './SlashMenu.js';
 import {
   type Buffer,
   backspace,
@@ -42,6 +44,10 @@ type PickerState = {
   query: string;
   index: number;
   mode: 'default' | 'image' | 'document';
+  /** Current page in the paged `@` list (default mode only). */
+  page: number;
+  /** `@` default mode only: the user chose "Type a path…" and is typing a path. */
+  manual: boolean;
 };
 
 /**
@@ -73,16 +79,70 @@ export const Prompt: React.FC<Props> = ({
   // Paths toggled within the current image/document-picker session.
   const [selected, setSelected] = useState<string[]>([]);
   const filteredRef = useRef<FileEntry[]>([]);
+  // Slash-command autocomplete: highlighted row + a one-shot Esc dismissal.
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashFilteredRef = useRef<SlashCommandMeta[]>([]);
+
+  // The menu opens on a leading `/` with no whitespace yet (still typing the
+  // command name); a space starts argument editing and closes it. Derived from
+  // the buffer rather than a trigger char, unlike the `@` picker.
+  const slashQuery =
+    !disabled && !picker && !slashDismissed && buf.text.startsWith('/') && !/\s/.test(buf.text)
+      ? buf.text.slice(1)
+      : null;
+  const slashOpen = slashQuery !== null;
+
+  // Reset the highlight whenever the filter changes; let a fresh `/` re-open the
+  // menu after an Esc dismissal once the buffer leaves slash-command territory.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the query string only.
+  useEffect(() => setSlashIndex(0), [slashQuery]);
+  useEffect(() => {
+    if (!buf.text.startsWith('/')) setSlashDismissed(false);
+  }, [buf.text]);
 
   // Track latest filtered list from the picker so Enter/Space knows the target.
   const handlePickerResolve = useCallback((files: FileEntry[]) => {
     filteredRef.current = files;
     setPicker((p) => {
       if (!p) return p;
-      const max = Math.max(0, files.length - 1);
+      // Default mode is paged: rows = page files + Show-more + Type-a-path, so
+      // clamp to the row count. Multi-select modes index files directly.
+      const max =
+        p.mode === 'default'
+          ? pickerLayout(files.length, p.page).count - 1
+          : Math.max(0, files.length - 1);
       return p.index > max ? { ...p, index: max } : p;
     });
   }, []);
+
+  const handleSlashResolve = useCallback((cmds: SlashCommandMeta[]) => {
+    slashFilteredRef.current = cmds;
+  }, []);
+
+  /**
+   * Send (or act on) a submitted line. `/image`/`/doc` open their multi-select
+   * pickers instead of being sent; everything else goes to `onSubmit`. Shared by
+   * the Enter handler and the slash menu's "run a no-arg command now" path.
+   */
+  function submit(text: string) {
+    if (text === '/image' || text === '/img') {
+      setBuf(empty());
+      setSelected([]);
+      setPicker({ start: 0, query: '', index: 0, mode: 'image', page: 0, manual: false });
+      return;
+    }
+    if (text === '/doc' || text === '/docs') {
+      setBuf(empty());
+      setSelected([]);
+      setPicker({ start: 0, query: '', index: 0, mode: 'document', page: 0, manual: false });
+      return;
+    }
+    if (text.length > 0) {
+      setBuf(empty());
+      onSubmit(text);
+    }
+  }
 
   function shouldOpenAtPosition(text: string, idx: number): boolean {
     if (idx === 0) return true;
@@ -151,25 +211,66 @@ export const Prompt: React.FC<Props> = ({
         return;
       }
 
-      // Single-select `@` file picker. The `@query` run lives at [start, caret).
-      if (key.escape) {
-        // Drop the `@` and the query run.
+      // Single-select `@` file picker, paged. The `@query` run lives at
+      // [start, caret); rows are [≤5 files] [Show more…] [Type a path…].
+      const { pageStart, showMoreIndex, manualIndex, count, pageCount } = pickerLayout(
+        filteredRef.current.length,
+        picker.page,
+      );
+
+      // Remove the `@` and its query run, then close the picker.
+      const closeAndDropAt = () => {
         setBuf((b) => ({
           text: b.text.slice(0, picker.start) + b.text.slice(b.caret),
           caret: picker.start,
         }));
         setPicker(null);
+      };
+
+      // ---- "Type a path…" sub-mode: the query run is a free-form path ----
+      if (picker.manual) {
+        if (key.escape) {
+          // Back out to the list (Esc again there closes the picker).
+          setPicker({ ...picker, manual: false });
+          return;
+        }
+        if (key.return) {
+          const path = picker.query.trim();
+          if (path) insertPath(path);
+          else closeAndDropAt();
+          return;
+        }
+        if (key.backspace || key.delete) {
+          if (picker.query.length === 0) {
+            closeAndDropAt();
+            return;
+          }
+          setBuf(backspace);
+          setPicker({ ...picker, query: picker.query.slice(0, -1) });
+          return;
+        }
+        if (input && !key.ctrl && !key.meta && !key.tab && !key.leftArrow && !key.rightArrow) {
+          setBuf((b) => insert(b, input));
+          setPicker({ ...picker, query: picker.query + input });
+          return;
+        }
+        return;
+      }
+
+      // ---- list mode ----
+      if (key.escape) {
+        closeAndDropAt();
         return;
       }
       if (key.return) {
-        const choice = filteredRef.current[picker.index];
-        if (choice) insertPath(choice.path);
-        else {
-          setBuf((b) => ({
-            text: b.text.slice(0, picker.start) + b.text.slice(b.caret),
-            caret: picker.start,
-          }));
-          setPicker(null);
+        if (picker.index === manualIndex) {
+          setPicker({ ...picker, manual: true });
+        } else if (picker.index === showMoreIndex) {
+          setPicker({ ...picker, page: (picker.page + 1) % pageCount, index: 0 });
+        } else {
+          const choice = filteredRef.current[pageStart + picker.index];
+          if (choice) insertPath(choice.path);
+          else closeAndDropAt();
         }
         return;
       }
@@ -178,30 +279,63 @@ export const Prompt: React.FC<Props> = ({
         return;
       }
       if (key.downArrow) {
-        const max = Math.max(0, filteredRef.current.length - 1);
-        setPicker((p) => (p ? { ...p, index: Math.min(max, p.index + 1) } : p));
+        setPicker((p) => (p ? { ...p, index: Math.min(count - 1, p.index + 1) } : p));
         return;
       }
       if (key.backspace || key.delete) {
         if (picker.query.length === 0) {
           // Backspacing over the `@` closes the picker.
-          setBuf((b) => ({
-            text: b.text.slice(0, picker.start) + b.text.slice(b.caret),
-            caret: picker.start,
-          }));
-          setPicker(null);
+          closeAndDropAt();
           return;
         }
         setBuf(backspace);
-        setPicker({ ...picker, query: picker.query.slice(0, -1), index: 0 });
+        // A changed filter restarts paging.
+        setPicker({ ...picker, query: picker.query.slice(0, -1), index: 0, page: 0 });
         return;
       }
       if (input && !key.ctrl && !key.meta && !key.tab && !key.leftArrow && !key.rightArrow) {
         setBuf((b) => insert(b, input));
-        setPicker({ ...picker, query: picker.query + input, index: 0 });
+        setPicker({ ...picker, query: picker.query + input, index: 0, page: 0 });
         return;
       }
       return;
+    }
+
+    // ---- slash-command autocomplete is open ----
+    if (slashOpen) {
+      const cmds = slashFilteredRef.current;
+      if (key.escape) {
+        setSlashDismissed(true);
+        return;
+      }
+      if (key.upArrow) {
+        setSlashIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSlashIndex((i) => Math.min(Math.max(0, cmds.length - 1), i + 1));
+        return;
+      }
+      // Tab completes the highlighted command name (and a trailing space when it
+      // takes arguments); Enter additionally *runs* a no-arg command now. With no
+      // match, Enter falls through so an unknown `/cmd` still gets submitted.
+      if ((key.tab || key.return) && cmds.length > 0) {
+        const cmd = cmds[slashIndex];
+        if (cmd) {
+          if (cmd.args) {
+            const text = `/${cmd.name} `;
+            setBuf({ text, caret: text.length });
+          } else if (key.return) {
+            submit(`/${cmd.name}`);
+          } else {
+            const text = `/${cmd.name}`;
+            setBuf({ text, caret: text.length });
+          }
+        }
+        return;
+      }
+      // Any other key (typing, backspace, caret) falls through and keeps the
+      // query — and therefore the menu — live.
     }
 
     // ---- picker is closed ----
@@ -220,26 +354,7 @@ export const Prompt: React.FC<Props> = ({
         });
         return;
       }
-      const text = buf.text.trim();
-      // `/image` (or `/img`) opens the multi-select image picker instead of
-      // submitting — images are staged for the next message, not sent now.
-      if (text === '/image' || text === '/img') {
-        setBuf(empty());
-        setSelected([]);
-        setPicker({ start: 0, query: '', index: 0, mode: 'image' });
-        return;
-      }
-      // `/doc` (or `/docs`) opens the multi-select document picker.
-      if (text === '/doc' || text === '/docs') {
-        setBuf(empty());
-        setSelected([]);
-        setPicker({ start: 0, query: '', index: 0, mode: 'document' });
-        return;
-      }
-      if (text.length > 0) {
-        setBuf(empty());
-        onSubmit(text);
-      }
+      submit(buf.text.trim());
       return;
     }
     // Esc with an empty buffer clears any staged attachments.
@@ -287,7 +402,7 @@ export const Prompt: React.FC<Props> = ({
     if (input === '@' && shouldOpenAtPosition(buf.text, buf.caret)) {
       const start = buf.caret;
       setBuf((b) => insert(b, '@'));
-      setPicker({ start, query: '', index: 0, mode: 'default' });
+      setPicker({ start, query: '', index: 0, mode: 'default', page: 0, manual: false });
       return;
     }
     // Plain input (including multi-char pastes, which may contain newlines).
@@ -320,10 +435,15 @@ export const Prompt: React.FC<Props> = ({
           selectedIndex={picker.index}
           onResolve={handlePickerResolve}
           mode={picker.mode}
+          page={picker.page}
+          manual={picker.manual}
           selected={
             picker.mode === 'image' || picker.mode === 'document' ? new Set(selected) : undefined
           }
         />
+      ) : null}
+      {slashOpen ? (
+        <SlashMenu query={slashQuery} selectedIndex={slashIndex} onResolve={handleSlashResolve} />
       ) : null}
       <Box borderStyle="round" borderColor={Theme.primary} paddingX={1}>
         <CaretLine

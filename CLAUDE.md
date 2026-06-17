@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DeckPilot is a conversational CLI that turns a terminal chat into polished PowerPoint decks, powered by the GitHub Copilot SDK. Inputs include prompts, outlines, markdown, research notes, and structured data; outputs are real `.pptx` files with consistent layouts, speaker notes, themes, and reusable brand templates.
 
-Current version: **v1.2** (see `package.json` for the exact number). This is a mature, fully scaffolded TypeScript/Node project — not a greenfield repo.
+Current version: **v1.3** (see `package.json` for the exact number; **keep this line in sync on minor/major bumps**). This is a mature, fully scaffolded TypeScript/Node project — not a greenfield repo.
 
 ## How it works (architecture)
 
@@ -34,14 +34,18 @@ The two integration points that shape the codebase are settled — keep changes 
 
 **Whenever a change adds, removes, or alters user-visible behavior, treat the documentation as part of the change — update it in the same unit of work, and bump the version when cutting a release.** Documentation drift is what made this file wrong before; don't recreate it.
 
-The convention here is a **minor bump per feature set** (`0.16 → 0.17`), patch bumps for fixes (`0.14.5 → 0.14.6`). When a feature warrants a new version:
+**Default to a patch bump** (`1.3.0 → 1.3.1`) for *every* change — features and fixes alike. **Only bump the minor (`1.3.x → 1.4.0`) or major (`1.x → 2.0.0`) when the user explicitly asks for it** (e.g. "cut a 1.4", "this is a 2.0"). Never advance the minor or major on your own initiative; when in doubt, patch. When cutting a new version:
 
-1. **`package.json`** — bump `version`.
-2. **`README.md`** — update the `> **Status:** vX.Y` blockquote and add/update the Roadmap entry (move `(current)` to the new version; describe the feature concretely).
-3. **`docs/CLI-REFERENCE.md`** — add/adjust any new commands or flags (with the flag table and examples).
-4. **`docs/TEMPLATE_SPEC.md`** — if the `TemplateSpec` schema in `src/template/spec.ts` changed (new fields, new extraction), document the field and tag it `(vX.Y+)`.
-5. **`docs/INSTALL.md` / `docs/INSTALL-WINDOWS.md`** — update only if install/bootstrap behavior changed. The installer scripts carry their **own** `INSTALL_SCRIPT_VERSION` (separate lifecycle from the package version); bump it only when the installer itself changes.
-6. Keep version tags inside docs (`(v0.16+)`, etc.) accurate, and ensure the README's feature claims match what the code actually delivers.
+**Every version reference in the repo must move together — a bump is not done until they all match.** The version string lives in more places than `package.json`; missing one (especially the installer scripts) breaks the test suite or ships stale docs.
+
+1. **`package.json`** — bump `version`. **In the same step, bump `INSTALL_SCRIPT_VERSION` in both `install.sh` and `install.ps1` to the *exact same* value** — `test/install-smoke.test.ts` and `test/install-ps-smoke.test.ts` assert these equal `package.json.version`, so a mismatch fails the suite. (These are not a separate lifecycle.)
+2. **`CLAUDE.md`** — the `Current version: **vX.Y**` line near the top tracks the *minor* line, so it only changes on a minor/major bump (a patch like `1.3.0 → 1.3.1` leaves it as `v1.3`).
+3. **`README.md`** — the `> **Status:** vX.Y` blockquote likewise tracks the minor line (unchanged on a patch). Always add/update the Roadmap entry to the exact new version (move `(current)` to it; describe the change concretely).
+4. **`docs/CLI-REFERENCE.md`** — add/adjust any new commands or flags (with the flag table and examples).
+5. **`docs/TEMPLATE_SPEC.md`** — if the `TemplateSpec` schema in `src/template/spec.ts` changed (new fields, new extraction), document the field and tag it `(vX.Y+)`.
+6. **`docs/INSTALL.md` / `docs/INSTALL-WINDOWS.md`** — update the sample installer-output banner (`DeckPilot installer vX.Y.Z`) in both files to the new version. Update the surrounding install/bootstrap *prose* only if that behavior actually changed.
+7. Keep version tags inside docs (`(v0.16+)`, etc.) accurate, and ensure the README's feature claims match what the code actually delivers.
+8. **Final sweep** — after bumping, grep for the *old* version and reconcile every remaining hit: `grep -rn "<old-version>" README.md docs/ CLAUDE.md package.json install.sh install.ps1`. The bump is done only when this returns nothing unexpected (historical Roadmap entries naturally keep their own version).
 
 When asked to "update the docs for the new version," the source of truth is the **code and the latest commits** — diff what changed since the last version bump (`git log <last-bump>..HEAD`), then reconcile the files above against it.
 
