@@ -42,11 +42,28 @@ export type DeckPilotClient = {
 
 export const UNKNOWN_MODEL_LABEL = '(copilot default)';
 
+/**
+ * Env for the spawned Copilot runtime, with Node's experimental-feature warnings
+ * silenced. The bundled CLI uses `node:sqlite`, which makes Node print a noisy
+ * `ExperimentalWarning: SQLite is an experimental feature …` on every run — it's
+ * not actionable for our users. We add `--disable-warning=ExperimentalWarning`
+ * (Node ≥ 22) rather than `NODE_NO_WARNINGS`, so genuine deprecation warnings
+ * still surface. The SDK *replaces* `process.env` with whatever we pass (it does
+ * `options.env ?? process.env`), so we spread it rather than set in isolation.
+ */
+function runtimeEnvWithoutExperimentalWarnings(): Record<string, string | undefined> {
+  const flag = '--disable-warning=ExperimentalWarning';
+  const existing = process.env.NODE_OPTIONS?.trim();
+  const nodeOptions = !existing ? flag : existing.includes(flag) ? existing : `${existing} ${flag}`;
+  return { ...process.env, NODE_OPTIONS: nodeOptions };
+}
+
 export function createClient(opts: CreateClientOptions = {}): DeckPilotClient {
   const { token } = resolveGitHubToken(opts.gitHubToken);
   const client = new CopilotClient({
     gitHubToken: token,
     baseDirectory: opts.baseDirectory,
+    env: runtimeEnvWithoutExperimentalWarnings(),
   });
 
   return {

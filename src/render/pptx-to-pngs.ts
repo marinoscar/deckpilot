@@ -119,9 +119,12 @@ export async function pptxToPngs(
   let results: Awaited<ReturnType<typeof convertPptxToPng>>;
   try {
     // Bundled safe fonts first, then any caller dirs, then the OS scan.
+    // logLevel 'off': previews are approximate by design, so pptx-glimpse's
+    // per-feature warnings (font.notFound, graphicFrame.unsupported, …) are just
+    // noise on the user's console — the saved .pptx is unaffected.
     results = await convertPptxToPng(buf, {
       width,
-      logLevel: 'warn',
+      logLevel: 'off',
       fontMapping,
       fontDirs: [bundledFonts, ...(opts.fontDirs ?? [])],
     });
@@ -131,7 +134,7 @@ export async function pptxToPngs(
     try {
       results = await convertPptxToPng(buf, {
         width,
-        logLevel: 'warn',
+        logLevel: 'off',
         fontMapping,
         fontDirs: [bundledFonts],
         skipSystemFonts: true,
