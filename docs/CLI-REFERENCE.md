@@ -420,6 +420,27 @@ a single message can carry both. Size caps: ~60k characters per document,
 are copied into `~/.deckpilot/projects/<slug>/context/` and recorded in the
 transcript. `Esc` on an empty prompt line clears the staged set.
 
+#### In-chat: context-window usage (`/context`)
+
+DeckPilot mirrors GitHub Copilot's own context-window accounting so you can see
+how full the conversation is before it gets compacted. Two surfaces share the
+same live data (fed by Copilot's `session.usage_info` and `assistant.usage`
+events):
+
+- **Status-bar gauge** — once the first model turn lands, the footer's top row
+  gains a `ctx ██████ 38% 48.1k/128k · /context` segment. The mini-bar and
+  percentage are **colour-coded** — green (roomy) → yellow (≥60%) → red (≥85%) —
+  so a filling window is visible at a glance without running a command.
+- **`/context` report** — run it for a full bordered panel: a wide colour-coded
+  gauge with `current / limit tokens · free`, a per-bucket **breakdown** (system
+  prompt, tool definitions, conversation, message count), and **session totals**
+  (model API calls, input / output / reasoning tokens, cache read / write with a
+  cache-hit rate). Before the first turn it explains the snapshot isn't reported
+  yet; the breakdown rows only appear for the buckets Copilot reports.
+
+The numbers come straight from Copilot — DeckPilot doesn't estimate tokens
+itself, so they match what the service will act on when it decides to compact.
+
 ---
 
 ### `deckpilot skill list | show | create | edit | delete`

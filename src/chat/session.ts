@@ -46,13 +46,19 @@ import { log } from '../util/logger.js';
 import { buildImageAttachments, effectivePrompt } from './attachments.js';
 import { type ExtractOpts, buildContextBlock } from './document-context.js';
 import { IMPROVE_STUDY_MAX_SLIDES, renderImproveGuidance } from './improve.js';
-import type { TranscriptEntry } from './session-types.js';
+import type {
+  ContextSnapshot,
+  ContextUsage,
+  TranscriptEntry,
+  UsageTotals,
+} from './session-types.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { TRANSFORM_STUDY_MAX_SLIDES, renderTransformGuidance } from './transform.js';
-export type { TranscriptEntry };
+export type { TranscriptEntry, ContextUsage, ContextSnapshot, UsageTotals };
 
 export type SessionListener = (entries: TranscriptEntry[]) => void;
 export type ModelListener = (model: string) => void;
+export type UsageListener = (usage: ContextUsage) => void;
 export type BusyListener = (busy: boolean) => void;
 export type BriefListener = (brief: DeckBrief | null) => void;
 export type TemplateListener = (template: TemplateProfile | null) => void;
@@ -102,6 +108,20 @@ export class ChatSession {
   private listeners = new Set<SessionListener>();
   private modelListeners = new Set<ModelListener>();
   private busyListeners = new Set<BusyListener>();
+  private usageListeners = new Set<UsageListener>();
+  /** Latest context-window snapshot from `session.usage_info` (null pre-first-turn). */
+  private usageInfo: ContextSnapshot | null = null;
+  /** Running totals summed from every `assistant.usage` event this session. */
+  private usageTotals: UsageTotals = {
+    apiCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  /** The most recent single LLM API call's usage. */
+  private lastUsage: ContextUsage['last'] = null;
   private busy = false;
   private session: CopilotSession | null = null;
   private streamingId: string | null = null;
@@ -201,6 +221,40 @@ export class ChatSession {
     return () => {
       this.modelListeners.delete(fn);
     };
+  }
+
+  /** Current context-window + cumulative-token usage. Safe to call any time. */
+  getContextUsage(): ContextUsage {
+    return {
+      context: this.usageInfo ? { ...this.usageInfo } : null,
+      totals: { ...this.usageTotals },
+      last: this.lastUsage ? { ...this.lastUsage } : null,
+    };
+  }
+
+  /** Subscribe to usage changes; fires immediately with the current snapshot. */
+  onUsageChange(fn: UsageListener): () => void {
+    this.usageListeners.add(fn);
+    fn(this.getContextUsage());
+    return () => {
+      this.usageListeners.delete(fn);
+    };
+  }
+
+  private emitUsage(): void {
+    if (this.usageListeners.size === 0) return;
+    const snapshot = this.getContextUsage();
+    for (const fn of this.usageListeners) fn(snapshot);
+  }
+
+  /** Push a rich `/context` report into the transcript. */
+  showContextReport(): void {
+    this.push({
+      kind: 'context',
+      id: this.id(),
+      usage: this.getContextUsage(),
+      model: this.getModel(),
+    });
   }
 
   isBusy(): boolean {
@@ -1097,6 +1151,39 @@ export class ChatSession {
         status: success ? 'done' : 'error',
         detail,
       });
+    });
+    session.on('session.usage_info', (event) => {
+      const d = event.data;
+      if (typeof d.currentTokens !== 'number' || typeof d.tokenLimit !== 'number') return;
+      this.usageInfo = {
+        currentTokens: d.currentTokens,
+        tokenLimit: d.tokenLimit,
+        conversationTokens: d.conversationTokens,
+        systemTokens: d.systemTokens,
+        toolDefinitionsTokens: d.toolDefinitionsTokens,
+        messagesLength: d.messagesLength ?? 0,
+      };
+      this.emitUsage();
+    });
+    session.on('assistant.usage', (event) => {
+      const d = event.data;
+      // Sum every API call (including sub-agent calls) into the session totals.
+      this.usageTotals.apiCalls += 1;
+      this.usageTotals.inputTokens += d.inputTokens ?? 0;
+      this.usageTotals.outputTokens += d.outputTokens ?? 0;
+      this.usageTotals.reasoningTokens += d.reasoningTokens ?? 0;
+      this.usageTotals.cacheReadTokens += d.cacheReadTokens ?? 0;
+      this.usageTotals.cacheWriteTokens += d.cacheWriteTokens ?? 0;
+      this.lastUsage = {
+        model: d.model ?? this.getModel(),
+        inputTokens: d.inputTokens ?? 0,
+        outputTokens: d.outputTokens ?? 0,
+        reasoningTokens: d.reasoningTokens ?? 0,
+        cacheReadTokens: d.cacheReadTokens ?? 0,
+        cacheWriteTokens: d.cacheWriteTokens ?? 0,
+        durationMs: d.duration,
+      };
+      this.emitUsage();
     });
     session.on('session.idle', () => {
       this.streamingId = null;

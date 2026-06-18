@@ -1,7 +1,8 @@
 import { Box, Text } from 'ink';
 import type React from 'react';
 import { useEffect, useState } from 'react';
-import type { SaveState } from '../chat/session.js';
+import type { ContextSnapshot, SaveState } from '../chat/session.js';
+import { fillColor, fillFraction, fmtCompact, gauge, pct } from './usage-format.js';
 
 type Props = {
   status: 'idle' | 'streaming' | 'cancelled' | 'error';
@@ -9,6 +10,8 @@ type Props = {
   project?: string | null;
   template?: string | null;
   saveState?: SaveState | null;
+  /** Latest Copilot context-window snapshot; null until the first turn lands. */
+  context?: ContextSnapshot | null;
   hint?: string;
 };
 
@@ -26,6 +29,7 @@ const TIPS = [
   '/save renames the project; decks autosave to ~/.deckpilot/ already',
   'end a line with \\ then Enter for a multi-line message; Enter alone sends',
   '/critique <id> makes the agent re-preview and polish one slide',
+  '/context shows how full the Copilot context window is + token spend',
   'resume any deck later with: deckpilot resume <name>',
 ];
 
@@ -37,8 +41,10 @@ export const StatusBar: React.FC<Props> = ({
   project,
   template,
   saveState,
+  context,
   hint,
 }) => {
+  const ctxFraction = context ? fillFraction(context.currentTokens, context.tokenLimit) : 0;
   const color =
     status === 'streaming'
       ? 'cyan'
@@ -99,6 +105,18 @@ export const StatusBar: React.FC<Props> = ({
             <Text dimColor>{'  ·  '}</Text>
             <Text color={saveDotColor}>●</Text>
             <Text dimColor> {saveLabel}</Text>
+          </>
+        ) : null}
+        {context ? (
+          <>
+            <Text dimColor>{'  ·  '}</Text>
+            <Text dimColor>ctx </Text>
+            <Text color={fillColor(ctxFraction)}>{gauge(ctxFraction, 6)}</Text>
+            <Text color={fillColor(ctxFraction)}> {pct(ctxFraction)}</Text>
+            <Text dimColor>
+              {' '}
+              {fmtCompact(context.currentTokens)}/{fmtCompact(context.tokenLimit)} · /context
+            </Text>
           </>
         ) : null}
       </Box>

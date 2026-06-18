@@ -9,6 +9,7 @@ export type SlashCommand =
   | { kind: 'undo' }
   | { kind: 'model'; id?: string }
   | { kind: 'models' }
+  | { kind: 'context' }
   | { kind: 'template'; arg?: string }
   | { kind: 'templates' }
   | { kind: 'project'; arg?: string }
@@ -33,6 +34,7 @@ const KNOWN: Record<string, SlashCommand['kind']> = {
   undo: 'undo',
   model: 'model',
   models: 'models',
+  context: 'context',
   template: 'template',
   templates: 'templates',
   project: 'project',
@@ -146,6 +148,10 @@ export const SLASH_COMMANDS: SlashCommandMeta[] = [
   { name: 'new', summary: 'Clear the transcript and decouple from the project' },
   { name: 'model', args: '[id]', summary: 'Show the current LLM model, or switch it' },
   { name: 'models', summary: 'List available models' },
+  {
+    name: 'context',
+    summary: 'Show GitHub Copilot context-window usage + this session’s token spend',
+  },
   { name: 'quit', aliases: ['exit'], summary: 'Exit DeckPilot' },
 ];
 

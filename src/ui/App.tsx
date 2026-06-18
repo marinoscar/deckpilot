@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { Box, Static, useApp, useInput } from 'ink';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatSession, SaveState, TranscriptEntry } from '../chat/session.js';
+import type { ChatSession, ContextUsage, SaveState, TranscriptEntry } from '../chat/session.js';
 import { HELP_TEXT, parseSlash } from '../chat/slash.js';
 import { summarizeBrief } from '../deck/brief.js';
 import { renderDeck } from '../render/renderer.js';
@@ -36,6 +36,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
     session.getActiveTemplateName() ?? null,
   );
   const [saveState, setSaveState] = useState<SaveState | null>(session.getSaveState());
+  const [usage, setUsage] = useState<ContextUsage>(session.getContextUsage());
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [pendingDocuments, setPendingDocuments] = useState<string[]>([]);
   const lastCtrlC = useRef<number>(0);
@@ -74,6 +75,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
     [session],
   );
   useEffect(() => session.onSaveStateChange((s) => setSaveState(s)), [session]);
+  useEffect(() => session.onUsageChange(setUsage), [session]);
 
   useInput(async (input, key) => {
     // Esc interrupts an in-flight generation (the prompt is hidden while
@@ -320,6 +322,17 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
         }
         return;
       }
+      case 'context': {
+        const u = session.getContextUsage();
+        if (!u.context && u.totals.apiCalls === 0) {
+          session.addSystemMessage(
+            'No context usage reported yet. GitHub Copilot emits context stats after the first model turn — send a message, then run /context again.',
+          );
+          return;
+        }
+        session.showContextReport();
+        return;
+      }
       case 'critique': {
         if (!slash.slideId) {
           session.addSystemMessage(
@@ -414,6 +427,7 @@ export const App: React.FC<Props> = ({ session, onExit }) => {
             project={projectName}
             template={templateName}
             saveState={saveState}
+            context={usage.context}
           />
         </Box>
       </Box>

@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 import { Box, Text } from 'ink';
 import type React from 'react';
 import type { TranscriptEntry } from '../chat/session.js';
+import { ContextReport } from './ContextReport.js';
 import { StreamingMessage } from './StreamingMessage.js';
 import { Theme } from './theme.js';
 
@@ -102,6 +103,8 @@ export const TranscriptEntryView: React.FC<{ entry: TranscriptEntry }> = ({ entr
           </Text>
         </Box>
       );
+    case 'context':
+      return <ContextReport usage={e.usage} model={e.model} />;
   }
 };
 
