@@ -85,6 +85,24 @@ export const toggleDocument = (list: string[], path: string): string[] =>
 export const mergeDocuments = (list: string[], paths: string[]): string[] =>
   mergeImages(list, paths, MAX_ATTACHED_DOCUMENTS);
 
+/** What the `@` picker should do with a chosen file. */
+export type AtAction = 'image' | 'document' | 'path';
+
+/**
+ * Decide how an `@`-picked file is consumed. Outside a slash-command argument,
+ * images stage as visual examples and documents (incl. markdown) stage as text
+ * context — so the model actually receives the file. Inside a slash-command
+ * argument (e.g. `/template @brand.pptx`) the literal path is always inserted,
+ * and any unrecognised file type falls back to a path insert too. Pure so the
+ * routing is unit-testable without ink.
+ */
+export function atActionFor(path: string, inSlashArg: boolean): AtAction {
+  if (inSlashArg) return 'path';
+  if (extToMime(path)) return 'image';
+  if (DOCUMENT_EXT.test(path)) return 'document';
+  return 'path';
+}
+
 /**
  * Scan a directory (default: cwd) for files the `@` picker should surface. We
  * intentionally only show files the user can plausibly want for /template,

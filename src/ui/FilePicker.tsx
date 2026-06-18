@@ -134,7 +134,11 @@ export const FilePicker: React.FC<Props> = ({
           {filtered.length === 0
             ? `no files match "${query}"`
             : `newest first — ${pageStart + 1}–${pageStart + pageLen} of ${filtered.length}`}
-          <Text dimColor> (↑/↓ select · Enter insert · Esc cancel)</Text>
+          <Text dimColor> (↑/↓ select · Enter add · Esc cancel)</Text>
+        </Text>
+        <Text dimColor>
+          [img] attaches as a visual example · [doc]/md/txt/docx as text context · others insert a
+          path
         </Text>
         {pageFiles.map((f, i) => {
           const sel = selectedIndex === i;

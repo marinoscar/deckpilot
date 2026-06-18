@@ -41,7 +41,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '1.3.3'
+$INSTALL_SCRIPT_VERSION = '1.3.4'
 
 # ---------- globals ----------
 

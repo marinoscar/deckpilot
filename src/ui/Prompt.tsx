@@ -3,7 +3,13 @@ import { Box, Text, useInput } from 'ink';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SlashCommandMeta } from '../chat/slash.js';
-import { type FileEntry, pickerLayout, toggleDocument, toggleImage } from '../util/files.js';
+import {
+  type FileEntry,
+  atActionFor,
+  pickerLayout,
+  toggleDocument,
+  toggleImage,
+} from '../util/files.js';
 import { CaretLine } from './CaretLine.js';
 import { FilePicker } from './FilePicker.js';
 import { SlashMenu } from './SlashMenu.js';
@@ -58,8 +64,11 @@ type PickerState = {
  *   - Multi-line: end a line with `\` then Enter (or Shift+Enter where the
  *     terminal supports it) to insert a newline; Enter alone submits. Pasted
  *     text containing newlines is inserted verbatim.
- *   - Typing `@` (at the start or after whitespace) opens the file picker;
- *     Enter inserts the chosen path at the caret (single-select).
+ *   - Typing `@` (at the start or after whitespace) opens the file picker.
+ *     Enter on an image stages it as a visual example, on a document (incl.
+ *     markdown) stages its extracted text as context, and on anything else —
+ *     or when the line is a slash command like `/template @x.pptx` — inserts
+ *     the chosen path at the caret (single-select).
  *   - Submitting `/image` (or `/img`) / `/doc` (or `/docs`) opens a multi-select
  *     picker: Space toggles, Enter confirms (stages for the next message), Esc
  *     cancels. Staged files show in a tray above the prompt.
@@ -160,6 +169,40 @@ export const Prompt: React.FC<Props> = ({
     setPicker(null);
   }
 
+  /** Drop the `@query` run from the buffer and close the picker (no insertion). */
+  function dropAtRun() {
+    if (!picker) return;
+    setBuf((b) => ({
+      text: b.text.slice(0, picker.start) + b.text.slice(b.caret),
+      caret: picker.start,
+    }));
+    setPicker(null);
+  }
+
+  /**
+   * Act on a file chosen in the `@` picker. Outside a slash-command argument, an
+   * image stages as a visual example (like `/image`) and a document — incl.
+   * markdown — stages as text context (like `/doc`), so the model actually
+   * receives the file. Inside a slash-command argument (e.g. `/template
+   * @brand.pptx`) or for any other file type, the literal path is inserted for
+   * the command/agent to consume.
+   */
+  function chooseFile(path: string) {
+    const inSlashArg = picker ? buf.text.slice(0, picker.start).trimStart().startsWith('/') : false;
+    switch (atActionFor(path, inSlashArg)) {
+      case 'image':
+        onCommitImages?.([path]);
+        dropAtRun();
+        return;
+      case 'document':
+        onCommitDocuments?.([path]);
+        dropAtRun();
+        return;
+      default:
+        insertPath(path);
+    }
+  }
+
   useInput((input, key) => {
     if (disabled) return;
 
@@ -218,15 +261,6 @@ export const Prompt: React.FC<Props> = ({
         picker.page,
       );
 
-      // Remove the `@` and its query run, then close the picker.
-      const closeAndDropAt = () => {
-        setBuf((b) => ({
-          text: b.text.slice(0, picker.start) + b.text.slice(b.caret),
-          caret: picker.start,
-        }));
-        setPicker(null);
-      };
-
       // ---- "Type a path…" sub-mode: the query run is a free-form path ----
       if (picker.manual) {
         if (key.escape) {
@@ -236,13 +270,13 @@ export const Prompt: React.FC<Props> = ({
         }
         if (key.return) {
           const path = picker.query.trim();
-          if (path) insertPath(path);
-          else closeAndDropAt();
+          if (path) chooseFile(path);
+          else dropAtRun();
           return;
         }
         if (key.backspace || key.delete) {
           if (picker.query.length === 0) {
-            closeAndDropAt();
+            dropAtRun();
             return;
           }
           setBuf(backspace);
@@ -259,7 +293,7 @@ export const Prompt: React.FC<Props> = ({
 
       // ---- list mode ----
       if (key.escape) {
-        closeAndDropAt();
+        dropAtRun();
         return;
       }
       if (key.return) {
@@ -269,8 +303,8 @@ export const Prompt: React.FC<Props> = ({
           setPicker({ ...picker, page: (picker.page + 1) % pageCount, index: 0 });
         } else {
           const choice = filteredRef.current[pageStart + picker.index];
-          if (choice) insertPath(choice.path);
-          else closeAndDropAt();
+          if (choice) chooseFile(choice.path);
+          else dropAtRun();
         }
         return;
       }
@@ -285,7 +319,7 @@ export const Prompt: React.FC<Props> = ({
       if (key.backspace || key.delete) {
         if (picker.query.length === 0) {
           // Backspacing over the `@` closes the picker.
-          closeAndDropAt();
+          dropAtRun();
           return;
         }
         setBuf(backspace);

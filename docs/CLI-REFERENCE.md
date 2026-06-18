@@ -353,20 +353,36 @@ Type `@` at the start of a word to open a paged picker of **every file in the
 working folder**, sorted newest-first. It shows **5 files per page**; a **Show
 more…** row advances to the next page (`page X/Y`, wrapping to the first after
 the last), and a **Type a path…** row always sits at the end for files outside
-the folder. The chosen path is inserted into the prompt text (with a trailing
-space) — it's a *path reference* for the model, not an attachment (use `/doc` or
-`/image` to pull a file's contents in).
+the folder. Each row is tagged with its kind (`[img]`, `[doc]`, `[pptx]`, …).
+
+What `Enter` does **depends on the file**, so a single picker covers both
+referencing *and* attaching:
+
+- **Image** (`png`/`jpg`/`jpeg`/`gif`/`webp`) → staged as a **visual example**
+  the model can see, exactly like `/image`. So `@logo.png` sends the image.
+- **Document** (`md`/`markdown`/`txt`/`pptx`/`docx`) → its text is extracted and
+  staged as **reference context**, exactly like `/doc`. So `@notes.md` includes
+  the markdown's contents.
+- **Anything else** (e.g. `.json`, `.brief.json`, source files), **or an `@`
+  used inside a slash command** (e.g. `/template @brand.pptx`, `/load
+  @deck.brief.json`) → the literal **path** is inserted into the prompt (with a
+  trailing space), as before — a path reference for the command/agent.
+
+Staged images and documents show in the tray above the prompt (and are subject
+to the same per-turn limits as `/image` / `/doc`); `Esc` on an empty prompt line
+clears them.
 
 | Key | Action (while the `@` picker is open) |
 | --- | --- |
 | typing | Filters the list by substring; resets to page 1. |
 | `↑` / `↓` | Move the highlight across files, **Show more…**, and **Type a path…**. |
-| `Enter` | Insert the highlighted file's path; on **Show more…** page forward; on **Type a path…** switch to free-form path entry. |
-| `Enter` (path entry) | Insert the typed path verbatim (absolute or relative — any file on disk). |
+| `Enter` | Act on the highlighted file (attach image/doc, else insert its path); on **Show more…** page forward; on **Type a path…** switch to free-form path entry. |
+| `Enter` (path entry) | Resolve the typed path the same way (attach by type, else insert verbatim — absolute or relative). |
 | `Esc` | In path entry, return to the list; in the list, close the picker and drop the `@`. |
 
-The paging math lives in `pickerLayout()` (`src/util/files.ts`), shared with the
-Transform/Improve deck picker so the two behave identically.
+The routing decision is the pure `atActionFor()` helper and the paging math is
+`pickerLayout()` (both in `src/util/files.ts`, shared with the Transform/Improve
+deck picker so the pickers behave identically).
 
 #### In-chat: editing & keyboard
 

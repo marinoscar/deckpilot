@@ -189,12 +189,16 @@ saved project anywhere with: deckpilot resume <name>. Run "deckpilot" with no
 arguments to open the main menu where you can manage projects, templates,
 and settings.
 
-Type "@" in the prompt to insert a path to a .pptx or .brief.json in the
-current directory (handy for /template, /load, or referencing files in chat).
-Type "/image" to attach image files (png/jpg/gif/webp) from this folder as
+Type "@" in the prompt to pick any file in the current folder. What happens
+depends on the file: an image (png/jpg/gif/webp) attaches as a visual example
+the model can see, a document (.md/.markdown/.txt/.pptx/.docx) attaches as
+extracted text context — both exactly like /image and /doc — and any other file
+(or an "@" inside a slash command like "/template @brand.pptx") just inserts its
+path. So "@notes.md" includes the markdown, and "@logo.png" sends the image.
+Type "/image" to multi-select image files (png/jpg/gif/webp) from this folder as
 visual references the model can actually see — they're sent with your next
 message. Staged images show above the prompt; Esc on an empty line clears them.
-Type "/doc" to attach document files (.txt/.md/.pptx/.docx) — their text is
+Type "/doc" to multi-select document files (.txt/.md/.pptx/.docx) — their text is
 extracted and injected as reference context with your next message, and stays
 in the conversation for the rest of the session.
 

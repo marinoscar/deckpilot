@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PICKER_PAGE_SIZE, pickerLayout, scanWorkspaceFiles } from '../src/util/files.js';
+import {
+  PICKER_PAGE_SIZE,
+  atActionFor,
+  pickerLayout,
+  scanWorkspaceFiles,
+} from '../src/util/files.js';
 
 describe('pickerLayout', () => {
   it('PICKER_PAGE_SIZE is 5', () => {
@@ -57,6 +62,32 @@ describe('pickerLayout', () => {
       count: 3,
     });
     expect(pickerLayout(12, 2)).toMatchObject({ pageCount: 3, pageStart: 10, pageLen: 2 });
+  });
+});
+
+describe('atActionFor — how `@` consumes a chosen file', () => {
+  it('stages images as visual examples', () => {
+    for (const p of ['logo.png', 'shot.JPG', 'a.jpeg', 'x.gif', 'y.webp']) {
+      expect(atActionFor(p, false)).toBe('image');
+    }
+  });
+
+  it('stages documents (incl. markdown) as text context', () => {
+    for (const p of ['notes.md', 'README.markdown', 'brief.txt', 'deck.pptx', 'sow.docx']) {
+      expect(atActionFor(p, false)).toBe('document');
+    }
+  });
+
+  it('inserts a path for unrecognised file types', () => {
+    for (const p of ['data.json', 'plan.brief.json', 'script.ts', 'table.csv']) {
+      expect(atActionFor(p, false)).toBe('path');
+    }
+  });
+
+  it('always inserts a path inside a slash-command argument (e.g. /template @brand.pptx)', () => {
+    expect(atActionFor('brand.pptx', true)).toBe('path');
+    expect(atActionFor('notes.md', true)).toBe('path');
+    expect(atActionFor('logo.png', true)).toBe('path');
   });
 });
 
