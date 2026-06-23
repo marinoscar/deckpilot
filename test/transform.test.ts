@@ -36,22 +36,25 @@ describe('countPptxSlides', () => {
 
 describe('renderTransformGuidance', () => {
   const g = renderTransformGuidance();
-  it('states the 1:1 content + target-only style contract', () => {
+  it('states the 1:1 content + template-only style contract', () => {
     expect(g).toMatch(/same order/i);
     expect(g).toMatch(/never add, drop, merge, split, or reorder/i);
     expect(g).toMatch(/speaker notes/i);
     expect(g).toMatch(/ONLY source of visual style/i);
   });
-  it('mentions the study tool and keeps the approval gate', () => {
+  it('mentions the study tool and waives the approval gate', () => {
     expect(g).toContain('study_original_slides');
-    expect(g).toMatch(/approval gate is not waived/i);
+    expect(g).toMatch(/approval gate is WAIVED/i);
   });
 });
 
 describe('TRANSFORM_SEED_PROMPT', () => {
-  it('directs the model to study, propose, and stop for approval', () => {
+  it('directs the model to study, propose, and build automatically', () => {
     expect(TRANSFORM_SEED_PROMPT).toContain('study_original_slides');
     expect(TRANSFORM_SEED_PROMPT).toContain('propose_deck_brief');
     expect(TRANSFORM_SEED_PROMPT).toMatch(/build/);
+    // No longer waits for a "build" reply — it restyles into the active template.
+    expect(TRANSFORM_SEED_PROMPT).toMatch(/active template/i);
+    expect(TRANSFORM_SEED_PROMPT).toMatch(/do NOT need to wait/i);
   });
 });

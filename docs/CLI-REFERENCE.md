@@ -14,7 +14,7 @@ equivalent — this document is the canonical map.
 ```bash
 deckpilot                                    # opens the TUI menu
 deckpilot start my-pitch                     # creates / resumes a project, drops into chat
-deckpilot transform --original a.pptx --target b.pptx   # restyle a deck's content into another deck's look
+deckpilot transform --deck a.pptx --template acme       # restyle a deck's content 1:1 into a template's look
 deckpilot improve --source deck.pptx --template acme    # quality-check a deck and rebuild a better version
 deckpilot resume my-pitch                    # alias for `start <name>` on an existing project
 deckpilot project list                       # lists every saved project
@@ -645,33 +645,39 @@ deckpilot template show acme-corp
 
 ### `deckpilot transform`
 
-Reproduce an **original** deck's content in a **target** deck's visual style —
-"same content, new client." The target is loaded as a one-shot style template
-(palette, fonts, master/brand chrome); the original is seeded as content (its
-full extracted text **plus** a `study_original_slides` vision pass so the model
-sees every source slide). The agent reproduces the content **1:1** — same slide
-count and order, same titles/bullets/tables, the same speaker notes — proposes
-the slide-for-slide brief, and **pauses for your "build"** before building each
-slide through the normal critique loop. The chat stays open for adjustments.
+Restyle a deck: reproduce a deck's content in a **template's** visual style —
+"same content, new look." Two inputs, two steps: **pick the deck** to restyle
+and **pick the template** that supplies the style (palette, fonts, master/brand
+chrome). The deck is seeded as content (its full extracted text **plus** a
+`study_original_slides` vision pass so the model sees every source slide). The
+agent reproduces the content **1:1** — same slide count and order, same
+titles/bullets/tables, the same speaker notes — and, uniquely for transform
+mode, **builds and saves automatically** (no "build" approval gate) before
+leaving the chat open for adjustments.
 
 | Flag / arg | Description |
 | --- | --- |
-| `--original <pptx>` | **(required)** Path to the original `.pptx` — the content to reproduce. |
-| `--target <pptx>` | **(required)** Path to the target `.pptx` — the style/brand/colours to adopt. |
-| `[project]` | Project name (lower-case kebab). Defaults to `<original-stem>-transformed`. |
+| `--deck <pptx>` | **(required)** Path to the `.pptx` to restyle — the content to reproduce 1:1. |
+| `--template <name\|pptx>` | Saved template name (from `~/.deckpilot/templates/`) **or** a path to a `.pptx` to adopt the style of. Omit to pick one interactively. |
+| `--no-picker` | Skip the interactive template picker when templates are saved and no `--template` is set. |
+| `[project]` | Project name (lower-case kebab). Defaults to `<deck-stem>-transformed`. |
 | `--model <id>` | LLM model override. |
 | `--token <tok>` | GitHub token (or `COPILOT_GITHUB_TOKEN`). |
 | `--critique-passes <n>` | Preview passes per slide (0 disables; max 5). |
 
-Strict 1:1 requires the original to have **≤ 40 slides** (the deck brief is
-capped at 40); a larger deck fails fast with a clear message. The original/target
-paths are recorded on the project manifest, so a resumed transform restores the
-target style and the `study_original_slides` tool automatically. Also available
-in the TUI: **Transform a deck** on the main menu.
+Strict 1:1 requires the deck to have **≤ 40 slides** (the deck brief is capped
+at 40); a larger deck fails fast with a clear message. A template is required —
+if none is given or picked, the command fails with a hint to create one
+(`deckpilot template create <name> --from <deck.pptx>`). The deck path and the
+chosen template are recorded on the project manifest, so a resumed transform
+restores the style and the `study_original_slides` tool automatically. Contrast
+with [`improve`](#deckpilot-improve), which *rewrites* a deck rather than
+restyling it 1:1. Also available in the TUI: **Transform a deck** on the main
+menu (pick the deck, then the template).
 
 ```bash
-deckpilot transform --original client-a.pptx --target client-b.pptx
-deckpilot transform --original deck.pptx --target brand.pptx my-rebrand
+deckpilot transform --deck client-a.pptx --template acme-brand
+deckpilot transform --deck deck.pptx --template brand.pptx my-rebrand
 ```
 
 ---

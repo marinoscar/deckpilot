@@ -78,11 +78,14 @@ export type ChatSessionOptions = {
   /** Load a skill (staged AI instructions) from ~/.deckpilot/skills/ before chat starts. */
   skillName?: string;
   /**
-   * Transform mode: reproduce the ORIGINAL deck's content in the TARGET deck's
-   * style. The target is applied as a one-shot template; a study_original_slides
-   * tool is registered so the model can see the source.
+   * Transform mode: restyle a deck — reproduce its content 1:1 while adopting
+   * the active template's style. The style comes from the normal template
+   * mechanism (`templateName`/`templatePath`); a study_original_slides tool is
+   * registered so the model can see the source. (`targetPath` from pre-1.3.5
+   * projects is still honoured on resume via the manifest, but new transforms
+   * never set it.)
    */
-  transform?: { originalPath: string; targetPath: string };
+  transform?: { originalPath: string };
   /**
    * Improve mode: read a SOURCE deck, critique it, and rebuild a better version
    * in the active (named) template's style. A study_source_slides tool and a
@@ -203,7 +206,9 @@ export class ChatSession {
     this.requestedSkillName = opts.skillName;
     this.requestedProjectName = opts.projectName;
     this.transformOriginalPath = opts.transform?.originalPath;
-    this.transformTargetPath = opts.transform?.targetPath;
+    // `transformTargetPath` is no longer set by new transforms (style now comes
+    // from the active template); it is only restored from a pre-1.3.5 manifest
+    // in start(), so old transform projects still resume with their one-shot style.
     this.improveSourcePath = opts.improve?.sourcePath;
     this.ephemeral = opts.ephemeral === true;
     if (typeof opts.critiquePassesPerSlide === 'number') {
@@ -799,10 +804,11 @@ export class ChatSession {
       }
     }
 
-    // Transform mode: apply the TARGET deck as a one-shot style template so its
-    // palette/fonts/master flow into the renderer + previews. (System-prompt
-    // guidance is handled separately in buildSystemPrompt.)
-    if (this.transformTargetPath) {
+    // Back-compat: a pre-1.3.5 transform recorded a one-shot TARGET deck as its
+    // style donor. Apply it so its palette/fonts/master still flow into the
+    // renderer + previews on resume. New transforms leave this unset and get
+    // their style from the active named template instead.
+    if (this.transformTargetPath && !this.resolvedTemplate) {
       try {
         const profile = await this.loadTemplate(this.transformTargetPath);
         this.addSystemMessage(
@@ -813,11 +819,20 @@ export class ChatSession {
           `Could not load transform target style from ${this.transformTargetPath}: ${(e as Error).message}. Continuing — the deck will use default styling.`,
         );
       }
-      if (this.transformOriginalPath) {
-        this.addSystemMessage(
-          `Transform mode: reproducing ${basename(this.transformOriginalPath)} 1:1 in the target style. The agent will study the source, propose the brief, and wait for your "build".`,
-        );
-      }
+    }
+
+    // Transform mode: restyle a deck 1:1 into the active template's style, then
+    // build + save automatically (no "build" gate). (System-prompt guidance is
+    // handled separately in buildSystemPrompt.)
+    if (this.transformOriginalPath) {
+      const style = this.resolvedTemplate
+        ? `the "${this.resolvedTemplate.name}" template's style`
+        : this.transformTargetPath
+          ? `the ${basename(this.transformTargetPath)} style`
+          : 'the active template style';
+      this.addSystemMessage(
+        `Transform mode: reproducing ${basename(this.transformOriginalPath)} 1:1 in ${style}. The agent will study the deck, propose the brief, then build and save automatically — then stay in chat for adjustments.`,
+      );
     }
 
     // Improve mode: the source deck is seeded as content (text + a

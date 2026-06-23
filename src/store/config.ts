@@ -57,11 +57,26 @@ const OnboardingSchema = z
   })
   .strict();
 
+/**
+ * Cached result of the "is a newer DeckPilot published?" check. Written
+ * programmatically (not via `config set`) and used to throttle the network
+ * lookup to once a day.
+ */
+const UpdateSchema = z
+  .object({
+    /** Unix epoch ms of the last successful version fetch. */
+    lastCheckTime: z.number().optional(),
+    /** The latest version string seen on the main branch at that time. */
+    latestVersion: z.string().optional(),
+  })
+  .strict();
+
 export const ConfigSchema = z
   .object({
     schemaVersion: z.literal('1.0').default('1.0'),
     defaults: DefaultsSchema.default({}),
     onboarding: OnboardingSchema.default({ copilotReady: false }),
+    update: UpdateSchema.default({}),
   })
   .strict();
 
@@ -171,6 +186,7 @@ export function setConfigValue(cfg: Config, key: string, value: string): Config 
     schemaVersion: cfg.schemaVersion,
     defaults: { ...cfg.defaults },
     onboarding: { ...cfg.onboarding },
+    update: { ...cfg.update },
   };
   const [, tail] = canonical.split('.');
   let coerced: unknown = value;
@@ -202,6 +218,7 @@ export function unsetConfigValue(cfg: Config, key: string): Config {
     schemaVersion: cfg.schemaVersion,
     defaults: { ...cfg.defaults },
     onboarding: { ...cfg.onboarding },
+    update: { ...cfg.update },
   };
   const [, tail] = canonical.split('.');
   delete (next.defaults as Record<string, unknown>)[tail];
@@ -227,4 +244,28 @@ export async function markCopilotOnboarded(): Promise<void> {
   const cfg = await loadConfig();
   if (cfg.onboarding.copilotReady) return;
   await saveConfig({ ...cfg, onboarding: { ...cfg.onboarding, copilotReady: true } });
+}
+
+/** Read the cached update-check state, tolerating a missing/corrupt config. */
+export async function loadUpdateCache(): Promise<Config['update']> {
+  try {
+    const cfg = await loadConfig();
+    return cfg.update;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist the latest version seen + a fresh timestamp. Best-effort: a write
+ * failure (read-only home, etc.) must never break startup, so errors are
+ * swallowed.
+ */
+export async function saveUpdateCache(latestVersion: string): Promise<void> {
+  try {
+    const cfg = await loadConfig();
+    await saveConfig({ ...cfg, update: { lastCheckTime: Date.now(), latestVersion } });
+  } catch {
+    /* ignore — update caching is non-essential */
+  }
 }

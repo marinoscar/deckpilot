@@ -5,11 +5,11 @@ import { defaultImproveProjectName } from '../../chat/improve.js';
 import { summarizeSkill } from '../../skill/spec.js';
 import { type SkillListEntry, listSkills } from '../../store/skills.js';
 import { type TemplateListEntry, listTemplates } from '../../store/templates.js';
-import { summarizeTemplate } from '../../template/spec.js';
 import { Panel } from '../menu/Panel.js';
 import { TextInput } from '../menu/TextInput.js';
 import { Theme } from '../theme.js';
 import { PptxPickStep } from './PptxPickStep.js';
+import { TemplatePickStep } from './TemplatePickStep.js';
 
 type Mode =
   | { kind: 'source' }
@@ -55,6 +55,9 @@ export const Improve: React.FC<Props> = ({ onStart, onBack }) => {
   if (mode.kind === 'template') {
     return (
       <TemplatePickStep
+        title="Improve"
+        step="step 2 of 4 — pick a template (required)"
+        emptyHint="Improve needs a template for the rebuilt deck. Create one with `deckpilot template create <name> --from <deck.pptx>`, then come back."
         templates={templates}
         tplIndex={tplIndex}
         setTplIndex={setTplIndex}
@@ -113,71 +116,6 @@ export const Improve: React.FC<Props> = ({ onStart, onBack }) => {
           });
         }}
       />
-    </Panel>
-  );
-};
-
-/**
- * Pick a saved template. Required in improve mode — there is no "Let the AI
- * choose" row; the improved deck always adopts a deliberate brand look. If no
- * templates exist, the only action is to go back and create one.
- */
-const TemplatePickStep: React.FC<{
-  templates: TemplateListEntry[] | null;
-  tplIndex: number;
-  setTplIndex: (n: number) => void;
-  onConfirm: (templateName: string) => void;
-  onBack: () => void;
-}> = ({ templates, tplIndex, setTplIndex, onConfirm, onBack }) => {
-  const count = templates?.length ?? 0;
-
-  useInput((input, key) => {
-    if (key.escape || input === 'b') {
-      onBack();
-      return;
-    }
-    if (count === 0) return;
-    if (key.upArrow) setTplIndex(Math.max(0, tplIndex - 1));
-    else if (key.downArrow) setTplIndex(Math.min(count - 1, tplIndex + 1));
-    else if (key.return) {
-      const t = templates?.[tplIndex];
-      if (t) onConfirm(t.name);
-    }
-  });
-
-  return (
-    <Panel
-      title="Improve"
-      subtitle="step 2 of 4 — pick a template (required)"
-      footer="↑/↓ navigate · Enter next · b/Esc back"
-    >
-      {templates === null ? (
-        <Text dimColor>loading templates …</Text>
-      ) : count === 0 ? (
-        <Box flexDirection="column">
-          <Text color="yellow">No saved templates.</Text>
-          <Box marginTop={1}>
-            <Text dimColor>
-              Improve needs a template for the rebuilt deck. Create one with `deckpilot template
-              create &lt;name&gt; --from &lt;deck.pptx&gt;`, then come back.
-            </Text>
-          </Box>
-        </Box>
-      ) : (
-        <Box flexDirection="column">
-          {templates.map((e, i) => {
-            const active = tplIndex === i;
-            return (
-              <Box key={e.name}>
-                <Text color={active ? Theme.primary : undefined} bold={active}>
-                  {active ? '❯ ' : '  '}
-                  {summarizeTemplate(e.spec)}
-                </Text>
-              </Box>
-            );
-          })}
-        </Box>
-      )}
     </Panel>
   );
 };

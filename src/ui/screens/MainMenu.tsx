@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { listProjects } from '../../store/projects.js';
+import type { UpdateInfo } from '../../util/version-check.js';
 import { Banner } from '../menu/Banner.js';
 import { type MenuItem, MenuList } from '../menu/MenuList.js';
 import { Panel } from '../menu/Panel.js';
@@ -22,6 +23,8 @@ export type MainChoice =
 
 type Props = {
   busy?: boolean;
+  /** When set, a newer DeckPilot is available — shown as a banner notice. */
+  update?: UpdateInfo | null;
   onPick: (choice: MainChoice) => void;
 };
 
@@ -53,7 +56,25 @@ const InfoBox: React.FC<{ projectCount: number | null }> = ({ projectCount }) =>
   </Box>
 );
 
-export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
+/** A friendly "you're a version behind" notice, shown only when an update exists. */
+const UpdateNotice: React.FC<{ update: UpdateInfo }> = ({ update }) => (
+  <Box
+    borderStyle="round"
+    borderColor={Theme.warn}
+    flexDirection="column"
+    paddingX={2}
+    marginX={1}
+    marginBottom={1}
+    width={PANEL_WIDTH}
+  >
+    <Text color={Theme.warn}>
+      ✨ DeckPilot v{update.latest} is available <Text dimColor>(you have v{update.current})</Text>
+    </Text>
+    <Text dimColor>Re-run the installer to update — see docs/INSTALL.md.</Text>
+  </Box>
+);
+
+export const MainMenu: React.FC<Props> = ({ busy, update, onPick }) => {
   const [projectCount, setProjectCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -84,7 +105,7 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
     {
       value: 'transform',
       label: 'Transform a deck',
-      detail: "Reproduce a deck's content in another deck's style",
+      detail: "Restyle a deck's content 1:1 into a template's look",
       hotkey: 'x',
     },
     {
@@ -147,6 +168,7 @@ export const MainMenu: React.FC<Props> = ({ busy, onPick }) => {
     <Box flexDirection="column" marginTop={1}>
       <Banner tagline={TAGLINE} />
       <InfoBox projectCount={projectCount} />
+      {update ? <UpdateNotice update={update} /> : null}
       <Panel
         title="Menu"
         subtitle="Use arrow keys and Enter to navigate"

@@ -1,4 +1,5 @@
 import { BaseCommand } from '../cli/base-command.js';
+import { checkForUpdate } from '../util/version-check.js';
 
 export default class Version extends BaseCommand {
   static override description = 'Print the DeckPilot version.';
@@ -13,5 +14,14 @@ export default class Version extends BaseCommand {
     this.log(`  platform  ${this.config.platform} ${this.config.arch}`);
     this.log(`  node      ${process.version}`);
     this.log(`  root      ${this.config.root}`);
+
+    // Best-effort, cached once a day; never blocks the version print on error.
+    const update = await checkForUpdate(this.config.version);
+    if (update) {
+      this.log('');
+      this.log(
+        `\x1b[33m✨ v${update.latest} is available — re-run the installer to update.\x1b[0m`,
+      );
+    }
   }
 }

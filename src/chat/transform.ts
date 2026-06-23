@@ -4,9 +4,10 @@ import JSZip from 'jszip';
 import { slugify } from '../store/paths.js';
 
 /**
- * Shared text + helpers for "transform" mode: reproduce an ORIGINAL deck's
- * content in a TARGET deck's visual style. Kept here (not in session.ts) so the
- * command and the TUI import the exact same prompt/contract.
+ * Shared text + helpers for "transform" mode: restyle a deck — reproduce its
+ * content 1:1 while adopting the active template's visual style. Kept here (not
+ * in session.ts) so the command and the TUI import the exact same
+ * prompt/contract.
  */
 
 /**
@@ -28,16 +29,16 @@ export const TRANSFORM_STUDY_MAX_SLIDES = 60;
 export const TRANSFORM_DOC_CHAR_BUDGET = 250_000;
 
 /**
- * The kickoff user message. The original deck's full extracted text is attached
- * to this message as reference context; the binding rules live in
+ * The kickoff user message. The deck's full extracted text is attached to this
+ * message as reference context; the binding rules live in
  * `renderTransformGuidance()` (system prompt). Kept concise on screen.
  */
 export const TRANSFORM_SEED_PROMPT = [
-  'Transform the attached ORIGINAL deck into the active TARGET template’s visual style — a strict 1:1 restyle, not a rewrite.',
+  'Restyle the attached deck into the active template’s visual style — a strict 1:1 restyle, not a rewrite.',
   '',
-  'The original deck’s full text (every slide’s title, body, bullets, tables, and speaker notes) is attached below as reference. Reproduce ALL of it: same slide count, same order, same wording, same notes — only the look changes to the target’s palette, fonts, and brand.',
+  'The deck’s full text (every slide’s title, body, bullets, tables, and speaker notes) is attached below as reference. Reproduce ALL of it: same slide count, same order, same wording, same notes — only the look changes to the active template’s palette, fonts, and brand.',
   '',
-  'First call study_original_slides once to see each source slide. Then call propose_deck_brief with one slide per source slide and STOP — wait for me to reply “build” before writing any slide code.',
+  'First call study_original_slides once to see each source slide. Then call propose_deck_brief with one slide per source slide. You do NOT need to wait for my approval in transform mode — once the brief is proposed, go straight into building every slide and then save the deck. When the deck is built, tell me where it is and stay in the chat so I can ask for changes.',
 ].join('\n');
 
 /** The durable transform contract appended to the system prompt in transform mode. */
@@ -45,29 +46,30 @@ export function renderTransformGuidance(): string {
   return [
     '## Transform mode: 1:1 restyle (binding)',
     '',
-    "This session restyles an ORIGINAL deck into a TARGET deck's visual style. It is a strict reproduction, not a rewrite.",
+    "This session restyles a deck into the active template's visual style. It is a strict reproduction of the deck's content, not a rewrite.",
     '',
-    '### Content contract (from the ORIGINAL)',
+    '### Content contract (from the deck)',
     '- Reproduce EVERY source slide, in the SAME ORDER, one brief slide per source slide. Same slide count — never add, drop, merge, split, or reorder.',
     '- Reproduce all content verbatim: titles, body text, bullets, and tables.',
     "- Reproduce each source slide's speaker notes into that slide's `notes`.",
-    '- Do not summarise, paraphrase, or “improve” the wording. Keep sparse slides sparse. The original’s extracted text (attached to the first user message) is the authoritative content source; if it looks truncated, rely on the study_original_slides images for the missing slides.',
+    '- Do not summarise, paraphrase, or “improve” the wording. Keep sparse slides sparse. The deck’s extracted text (attached to the first user message) is the authoritative content source; if it looks truncated, rely on the study_original_slides images for the missing slides.',
     '',
-    '### Style contract (from the TARGET)',
-    '- The TARGET deck is loaded as the active style template: its palette, fonts, master/brand chrome, and layout language are the ONLY source of visual style. Build the theme and every slide to match the TARGET.',
-    "- Ignore the ORIGINAL's colours, fonts, and decorative styling completely.",
-    "- Adopt the TARGET's aspect ratio; reflow each source slide's content to fit it — do not assume the original's dimensions.",
+    '### Style contract (from the active template)',
+    '- The active template is the ONLY source of visual style: its palette, fonts, master/brand chrome, and layout language. Build the theme and every slide to match it.',
+    "- Ignore the source deck's own colours, fonts, and decorative styling completely.",
+    "- Adopt the template's aspect ratio; reflow each source slide's content to fit it — do not assume the source deck's dimensions.",
     '',
     '### Seeing the source',
-    '- `study_original_slides` rasterises the ORIGINAL deck to images. Call it ONCE before proposing the brief, to understand each slide’s content and structure (cover vs. section divider vs. table vs. body). Take NO styling cues from these images — they show the OLD look you are replacing.',
+    '- `study_original_slides` rasterises the source deck to images. Call it ONCE before proposing the brief, to understand each slide’s content and structure (cover vs. section divider vs. table vs. body). Take NO styling cues from these images — they show the OLD look you are replacing.',
     '',
-    '### Workflow',
-    '- Phase 1: propose the brief (one slide per source slide, content + notes carried over, theme = TARGET style), present it, and WAIT for the user’s “build” approval. The approval gate is not waived in transform mode.',
-    '- Phases 2–3: author each slide in the TARGET style, run the normal critique loop, then save. After saving, stay in chat for adjustments.',
+    '### Workflow (automatic — the approval gate is WAIVED in transform mode)',
+    '- Phase 1: propose the brief (one slide per source slide, content + notes carried over, theme = the active template’s style) and present it. Do NOT wait for a “build” reply — transform mode is the explicit exception to the brief-approval gate; proceed immediately.',
+    '- Phases 2–3: author each slide in the template style, run the normal critique loop, then save the deck — all without pausing for approval.',
+    '- After saving, report where the file is in one line and stay in chat so the user can request adjustments.',
   ].join('\n');
 }
 
-/** Default project name for a transform: `<original-stem>-transformed`, slugified. */
+/** Default project name for a transform: `<deck-stem>-transformed`, slugified. */
 export function defaultTransformProjectName(originalPath: string): string {
   const stem = basename(originalPath, extname(originalPath));
   const base = slugify(stem) || 'deck';

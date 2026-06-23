@@ -10,6 +10,7 @@ import type { ProjectListEntry } from '../store/projects.js';
 import type { SkillListEntry } from '../store/skills.js';
 import type { TemplateListEntry } from '../store/templates.js';
 import { type TemplateSpec, blankTemplate } from '../template/spec.js';
+import { type UpdateInfo, checkForUpdate } from '../util/version-check.js';
 import { App as ChatApp } from './App.js';
 import { AuthErrorBanner } from './screens/AuthErrorBanner.js';
 import { CopilotCheck } from './screens/CopilotCheck.js';
@@ -29,8 +30,8 @@ type StartOpts = {
   projectName?: string;
   templateName?: string;
   skillName?: string;
-  /** Transform mode: reproduce the original's content in the target's style. */
-  transform?: { originalPath: string; targetPath: string };
+  /** Transform mode: restyle the deck (originalPath) into the active template's style. */
+  transform?: { originalPath: string };
   /** Improve mode: critique a source deck and rebuild a better version. */
   improve?: { sourcePath: string };
 };
@@ -56,6 +57,8 @@ type Props = {
   model?: string;
   critiquePassesPerSlide?: number;
   initialView?: View;
+  /** Running DeckPilot version (from oclif config) — drives the update check. */
+  version?: string;
   /**
    * When true (first run / Copilot never verified), gate on the readiness
    * screen before the menu. Resolved by the `menu` command from the persisted
@@ -74,6 +77,7 @@ export const RootApp: React.FC<Props> = ({
   model,
   critiquePassesPerSlide,
   initialView,
+  version,
   requireCopilotCheck = false,
 }) => {
   const { exit } = useApp();
@@ -81,6 +85,20 @@ export const RootApp: React.FC<Props> = ({
     initialView ?? (requireCopilotCheck ? { kind: 'copilot-check' } : { kind: 'main' }),
   );
   const [busy, setBusy] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+
+  // Non-blocking "newer version available?" check. Cached to once a day, so
+  // most launches resolve instantly without any network call.
+  useEffect(() => {
+    if (!version) return;
+    let cancelled = false;
+    void checkForUpdate(version).then((info) => {
+      if (!cancelled) setUpdate(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
 
   useEffect(() => {
     if (view.kind !== 'chat') return;
@@ -189,6 +207,7 @@ export const RootApp: React.FC<Props> = ({
     return (
       <MainMenu
         busy={busy}
+        update={update}
         onPick={(choice) => {
           switch (choice) {
             case 'start':
@@ -289,7 +308,8 @@ export const RootApp: React.FC<Props> = ({
         onStart={(opts) =>
           void startChat({
             projectName: opts.projectName,
-            transform: { originalPath: opts.originalPath, targetPath: opts.targetPath },
+            templateName: opts.templateName,
+            transform: { originalPath: opts.deckPath },
           })
         }
         onBack={back}

@@ -199,7 +199,7 @@ The installer will:
 ## What the installer prints (v0.14.5+)
 
 ```
-DeckPilot installer v1.3.4
+DeckPilot installer v1.3.5
 · Preflight
 ✓ Node 22.11.0
 ✓ Disk: 63437 MB free on drive C:

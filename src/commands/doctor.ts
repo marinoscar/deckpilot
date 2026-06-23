@@ -8,7 +8,7 @@ export default class Doctor extends BaseCommand {
   static override examples = ['<%= config.bin %> doctor'];
 
   async run(): Promise<void> {
-    const checks = await runDoctorChecks();
+    const checks = await runDoctorChecks(undefined, { currentVersion: this.config.version });
 
     for (const c of checks) {
       const mark = c.ok ? '✓' : c.soft ? '!' : '✗';

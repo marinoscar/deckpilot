@@ -1,6 +1,7 @@
 import { constants, accessSync } from 'node:fs';
 import { checkCopilotSdk, checkGitHubToken } from '../copilot/readiness.js';
 import { isPreviewAvailable } from '../render/pptx-to-pngs.js';
+import { checkForUpdate } from '../util/version-check.js';
 
 export type Check = {
   name: string;
@@ -16,7 +17,10 @@ export type Check = {
  * Doctor screen: Node version, GitHub auth/entitlement, cwd write access,
  * Copilot SDK reachability, and the visual critique pipeline.
  */
-export async function runDoctorChecks(token?: string): Promise<Check[]> {
+export async function runDoctorChecks(
+  token?: string,
+  opts?: { currentVersion?: string },
+): Promise<Check[]> {
   const checks: Check[] = [];
 
   const major = Number.parseInt(process.versions.node.split('.')[0]!, 10);
@@ -57,6 +61,21 @@ export async function runDoctorChecks(token?: string): Promise<Check[]> {
       ? undefined
       : 'Reinstall dependencies (`npm install`) — pptx-glimpse should be present.',
   });
+
+  // Soft version check (only when the caller knows the running version). Uses
+  // the once-a-day cache; a network failure simply reports "could not check".
+  if (opts?.currentVersion) {
+    const update = await checkForUpdate(opts.currentVersion);
+    checks.push({
+      name: 'Up to date',
+      ok: !update,
+      detail: update
+        ? `v${update.latest} available (you have v${update.current})`
+        : `v${opts.currentVersion}`,
+      soft: true,
+      hint: update ? 'Re-run the installer to update — see docs/INSTALL.md.' : undefined,
+    });
+  }
 
   return checks;
 }

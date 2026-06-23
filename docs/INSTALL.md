@@ -41,7 +41,7 @@ into a **fast update mode** when it detects an existing install.
 ## How it runs
 
 ```
-DeckPilot installer v1.3.4
+DeckPilot installer v1.3.5
 · Preflight
 ✓ Node 22.22.1
 ✓ Disk: 14823 MB free in /home/you/.deckpilot

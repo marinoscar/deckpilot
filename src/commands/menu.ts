@@ -37,6 +37,7 @@ export default class Menu extends BaseCommand {
         token: flags.token,
         model: flags.model,
         critiquePassesPerSlide: flags['critique-passes'],
+        version: this.config.version,
         requireCopilotCheck: !onboarded,
       }),
     );
