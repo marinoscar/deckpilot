@@ -41,7 +41,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$INSTALL_SCRIPT_VERSION = '1.3.5'
+$INSTALL_SCRIPT_VERSION = '1.3.6'
 
 # ---------- globals ----------
 
@@ -443,6 +443,46 @@ function Test-IsUpdateMode {
 
 # ---------- build ----------
 
+# Install dependencies, resilient to the Windows EPERM (npm exit -4048) failure
+# where a locked file under node_modules — antivirus real-time scanning, a
+# running 'deckpilot'/'node', or an editor/Explorer window open on the folder —
+# trips `npm ci`'s clean wipe. Try `npm ci`; on failure clear node_modules
+# (through transient locks) and fall back to `npm install`, which reconciles in
+# place instead of demanding a full wipe and so survives a non-essential lock.
+# Only surface an actionable error if BOTH paths fail.
+function Install-Deps {
+    $hasLock = Test-Path 'package-lock.json'
+    $primary = if ($hasLock) { 'npm ci' } else { 'npm install' }
+    try {
+        Invoke-Retry 2 { Invoke-Logged $primary { Invoke-Expression $primary } }
+        return
+    } catch {
+        if (-not $hasLock) { throw }   # no lockfile: 'npm install' was the primary and already failed
+        Write-Warn "npm ci failed ($($_.Exception.Message)) - clearing node_modules and retrying with npm install"
+        $nm = Join-Path $RepoDir 'node_modules'
+        if (Test-Path $nm) {
+            try { Invoke-Retry 4 { Remove-Item -Recurse -Force $nm -ErrorAction Stop } }
+            catch { Write-Note "(could not fully remove node_modules - npm install will reconcile what it can)" }
+        }
+    }
+    try {
+        Invoke-Retry 2 { Invoke-Logged 'npm install' { npm install } }
+    } catch {
+        Write-Die @"
+Installing dependencies failed.
+A locked file under node_modules is blocking npm (Windows EPERM / exit -4048) -
+usually a running 'deckpilot'/'node', an editor or Explorer window open on the
+install folder, or antivirus scanning node_modules. Free it, then retry:
+
+  Get-Process node,deckpilot -ErrorAction SilentlyContinue | Stop-Process -Force
+  # (optional) exclude $RepoDir from Defender / antivirus real-time scanning
+  .\install.ps1 -Reinstall
+
+(original error: $($_.Exception.Message))
+"@
+    }
+}
+
 function Invoke-Build {
     $needInstall = $true
     if ($IsUpdate -and $script:OldLockHash) {
@@ -457,8 +497,7 @@ function Invoke-Build {
         Write-Step "Installing npm deps"
         Push-Location $RepoDir
         try {
-            $cmd = if (Test-Path 'package-lock.json') { 'npm ci' } else { 'npm install' }
-            Invoke-Retry 2 { Invoke-Logged $cmd { Invoke-Expression $cmd } }
+            Install-Deps
             Write-Ok "Dependencies installed"
         } finally { Pop-Location }
     }

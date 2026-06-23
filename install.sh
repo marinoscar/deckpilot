@@ -33,7 +33,7 @@ set -euo pipefail
 
 # Bumped on every release of the installer. Printed at the top of every run so
 # users can confirm what they're actually executing (CDN cache misses are real).
-INSTALL_SCRIPT_VERSION="1.3.5"
+INSTALL_SCRIPT_VERSION="1.3.6"
 
 # NOTE: do NOT redirect bash's own stdin here. Under `curl ... | bash`, bash IS
 # reading the script from stdin. Redirecting stdin at the top would make bash
@@ -476,7 +476,14 @@ build() {
     step "Installing npm deps"
     if [ -f "$REPO_DIR/package-lock.json" ]; then
       if ! retry 2 bash -c "cd '$REPO_DIR' && npm ci" >>"$LOG" 2>&1; then
-        die "npm ci failed. See $LOG for details."
+        # `npm ci` wipes node_modules first and aborts if a file is locked.
+        # Fall back to `npm install`, which reconciles in place and is more
+        # forgiving of a stray lock or a partially-removed tree.
+        note "npm ci failed — clearing node_modules and retrying with npm install"
+        rm -rf "$REPO_DIR/node_modules" 2>/dev/null || true
+        if ! retry 2 bash -c "cd '$REPO_DIR' && npm install" >>"$LOG" 2>&1; then
+          die "npm ci and npm install both failed. See $LOG for details."
+        fi
       fi
     else
       if ! retry 2 bash -c "cd '$REPO_DIR' && npm install" >>"$LOG" 2>&1; then
